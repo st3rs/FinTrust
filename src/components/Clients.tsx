@@ -1,9 +1,11 @@
 import React, { useState, useRef } from 'react';
-import { Download, Search, MoreHorizontal, UserPlus, Filter, FileSpreadsheet, ChevronDown, ChevronRight, FileText, Upload, Image as ImageIcon, X } from 'lucide-react';
+import { Download, Search, MoreHorizontal, UserPlus, Filter, FileSpreadsheet, ChevronDown, ChevronRight, FileText, Upload, Image as ImageIcon, X, Users, UserCheck, TrendingUp, TrendingDown, QrCode } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { motion } from 'motion/react';
+import { generatePromptPayQRBase64 } from '@/src/lib/promptpay';
 import {
   Table,
   TableBody,
@@ -56,6 +58,8 @@ export default function Clients() {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [newClient, setNewClient] = useState({ name: '', email: '', contactPerson: '', phone: '', logoUrl: '' });
+  const [qrModalClient, setQrModalClient] = useState<any | null>(null);
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const toggleRow = (id: string) => {
@@ -73,6 +77,19 @@ export default function Clients() {
     client.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
     client.contactPerson.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const totalClients = clients.length;
+  const activeClients = clients.filter(client => client.status === 'Active').length;
+
+  const handleGenerateQR = async (client: any) => {
+    try {
+      setQrModalClient(client);
+      const url = await generatePromptPayQRBase64('0812345678', client.totalBilled);
+      setQrCodeDataUrl(url);
+    } catch (error) {
+      console.error(error);
+    }
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -273,6 +290,40 @@ export default function Clients() {
         </div>
       </div>
 
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 shadow-sm flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Total Clients</p>
+            <div className="mt-2 flex items-baseline gap-2">
+              <span className="text-3xl font-bold text-slate-900 dark:text-white">{totalClients}</span>
+              <span className="text-sm font-medium text-emerald-600 dark:text-emerald-400 flex items-center">
+                <TrendingUp className="w-3 h-3 mr-1" />
+                +12% from last month
+              </span>
+            </div>
+          </div>
+          <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
+            <Users className="w-6 h-6 text-primary" />
+          </div>
+        </div>
+
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 shadow-sm flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Active Clients</p>
+            <div className="mt-2 flex items-baseline gap-2">
+              <span className="text-3xl font-bold text-slate-900 dark:text-white">{activeClients}</span>
+              <span className="text-sm font-medium text-emerald-600 dark:text-emerald-400 flex items-center">
+                <TrendingUp className="w-3 h-3 mr-1" />
+                +5% from last month
+              </span>
+            </div>
+          </div>
+          <div className="w-12 h-12 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
+            <UserCheck className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
+          </div>
+        </div>
+      </div>
+
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-sm">
         <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-center gap-4 justify-between bg-slate-50/50 dark:bg-slate-900/50">
           <div className="relative w-full sm:max-w-md">
@@ -327,13 +378,25 @@ export default function Clients() {
                       </TableCell>
                       <TableCell className="font-medium text-slate-900 dark:text-white">
                         <div className="flex items-center gap-3">
-                          {client.logoUrl ? (
-                            <img src={client.logoUrl} alt={client.name} className="w-8 h-8 rounded-full object-cover shrink-0 border border-slate-200 dark:border-slate-800" />
-                          ) : (
-                            <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-xs shrink-0">
-                              {client.name.substring(0, 2).toUpperCase()}
-                            </div>
-                          )}
+                          <motion.div 
+                            whileHover={{ scale: 1.1 }}
+                            transition={{ type: "spring", stiffness: 400, damping: 10 }}
+                            title={client.name}
+                            className="cursor-pointer"
+                          >
+                            {client.logoUrl ? (
+                              <img src={client.logoUrl} alt={client.name} className="w-8 h-8 rounded-full object-cover shrink-0 border border-slate-200 dark:border-slate-800" />
+                            ) : (
+                              <div 
+                                className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 tabular-nums text-white"
+                                style={{
+                                  backgroundColor: `hsl(${client.name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % 360}, 65%, 55%)`
+                                }}
+                              >
+                                {client.name.substring(0, 2).toUpperCase()}
+                              </div>
+                            )}
+                          </motion.div>
                           <div>
                             <div className="font-medium">{client.name}</div>
                           </div>
@@ -371,6 +434,10 @@ export default function Clients() {
                             <DropdownMenuItem>View Details</DropdownMenuItem>
                             <DropdownMenuItem>Edit Client</DropdownMenuItem>
                             <DropdownMenuItem>Create Invoice</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleGenerateQR(client)}>
+                              <QrCode className="w-4 h-4 mr-2 text-indigo-500" />
+                              Generate QR
+                            </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </TableCell>
@@ -444,6 +511,40 @@ export default function Clients() {
           </Table>
         </div>
       </div>
+
+      <Dialog open={!!qrModalClient} onOpenChange={(open) => !open && setQrModalClient(null)}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle>Receive Payment</DialogTitle>
+            <DialogDescription>
+              Scan this PromptPay QR code to collect payment for <b className="text-slate-900 dark:text-slate-100">{qrModalClient?.name}</b>.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col items-center justify-center p-6 space-y-4">
+            {qrCodeDataUrl ? (
+              <div className="p-4 bg-white rounded-xl shadow-sm border border-slate-200">
+                <img src={qrCodeDataUrl} alt="PromptPay QR Code" className="w-48 h-48 rounded" />
+              </div>
+            ) : (
+              <div className="w-48 h-48 bg-slate-100 animate-pulse rounded-xl" />
+            )}
+            <div className="text-center">
+              <p className="text-sm text-slate-500 dark:text-slate-400 mb-1">Total Amount Owed</p>
+              <p className="text-2xl font-bold font-mono text-slate-900 dark:text-white">
+                ${qrModalClient?.totalBilled.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+            </div>
+            <p className="text-xs text-slate-400 mt-2 text-center max-w-[250px]">
+              Supported via PromptPay participating banks and applications.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="w-full" onClick={() => setQrModalClient(null)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
