@@ -168,6 +168,7 @@ export default function Dashboard() {
   const [isRecurringModalOpen, setIsRecurringModalOpen] = useState(false);
   const [recurringFrequency, setRecurringFrequency] = useState('Monthly');
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [invoiceSearchTerm, setInvoiceSearchTerm] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [emailPreviewInvoice, setEmailPreviewInvoice] = useState<Invoice | null>(null);
   const [isEmailSending, setIsEmailSending] = useState(false);
@@ -221,6 +222,15 @@ export default function Dashboard() {
 
   const filteredInvoices = invoices.filter(invoice => {
     if (statusFilter !== 'ALL' && invoice.status !== statusFilter) return false;
+    
+    if (invoiceSearchTerm.trim()) {
+      const term = invoiceSearchTerm.toLowerCase();
+      if (!invoice.customerName.toLowerCase().includes(term) && 
+          !invoice.invoiceNumber.toLowerCase().includes(term)) {
+        return false;
+      }
+    }
+    
     return true;
   });
 
@@ -473,7 +483,12 @@ export default function Dashboard() {
               </Select>
               <div className="relative hidden sm:block">
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" />
-                <Input placeholder="Search invoices..." className="pl-9 w-full md:w-[250px] bg-slate-50 border-slate-200" />
+                <Input 
+                  placeholder="Search invoices..." 
+                  className="pl-9 w-full md:w-[250px] bg-slate-50 border-slate-200"
+                  value={invoiceSearchTerm}
+                  onChange={(e) => setInvoiceSearchTerm(e.target.value)}
+                />
               </div>
             </div>
           </div>

@@ -1,0 +1,39 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-and-lint:
+    name: Lint and Build Checks
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci # using npm ci for clean, reliable installs
+
+      - name: Type Check & Lint
+        # Running tsc directly to ensure we get a non-zero exit code on failure 
+        # (overriding the '|| true' present in the package.json lint script)
+        run: npx tsc --noEmit
+
+      - name: Build Application
+        run: npm run build
