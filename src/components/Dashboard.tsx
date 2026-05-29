@@ -315,14 +315,14 @@ export default function Dashboard() {
               </div>
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setIsRecurringModalOpen(false)}>Cancel</Button>
-                <Button type="button" className="bg-indigo-600 hover:bg-indigo-700 text-white" onClick={handleCreateRecurringInvoice}>
+                <Button type="button" onClick={handleCreateRecurringInvoice}>
                   Create Schedule
                 </Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
           <Link to="/invoice/new">
-            <Button className="bg-slate-900 hover:bg-black dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100 shadow-sm rounded-md transition-all">
+            <Button className="shadow-sm rounded-md transition-all">
               <PlusCircle className="mr-2 h-4 w-4" />
               {t.createInvoice || 'Create Invoice'}
             </Button>
@@ -511,13 +511,21 @@ export default function Dashboard() {
                         </div>
                       </TableCell>
                       <TableCell className="px-4 py-4">
-                        <Badge className={`font-medium transition-all duration-200 hover:scale-[1.03] hover:shadow-sm cursor-default ${
-                          invoice.status === 'PAID' ? 'bg-green-100 text-green-700 hover:bg-green-200' : 
-                          invoice.status === 'UNPAID' ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 
-                          'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                        }`} variant="secondary">
-                          {invoice.status}
-                        </Badge>
+                        <div className="flex items-center gap-2">
+                          <Badge className={`font-medium transition-all duration-200 hover:scale-[1.03] hover:shadow-sm cursor-default ${
+                            invoice.status === 'PAID' ? 'bg-green-100 text-green-700 hover:bg-green-200' : 
+                            invoice.status === 'UNPAID' ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 
+                            'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                          }`} variant="secondary">
+                            {invoice.status}
+                          </Badge>
+                          {invoice.status === 'UNPAID' && (invoice.expiresAt || invoice.dueDate) && new Date(invoice.expiresAt || invoice.dueDate) < new Date() && (
+                            <Badge variant="outline" className="bg-red-50 text-red-600 border-red-200 flex items-center gap-1 px-1.5 py-0">
+                              <AlertTriangle className="w-3 h-3" />
+                              Past Due
+                            </Badge>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className="px-4 py-4 text-slate-600">{new Date(invoice.createdAt).toLocaleDateString()}</TableCell>
                       <TableCell className="px-4 py-4 text-right font-semibold text-slate-900">
@@ -607,13 +615,21 @@ export default function Dashboard() {
                   </div>
                   
                   <div className="flex items-center justify-between mt-2">
-                    <Badge className={`font-medium cursor-default ${
-                      invoice.status === 'PAID' ? 'bg-green-100 text-green-700' : 
-                      invoice.status === 'UNPAID' ? 'bg-amber-100 text-amber-700' : 
-                      'bg-slate-100 text-slate-700'
-                    }`} variant="secondary">
-                      {invoice.status}
-                    </Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge className={`font-medium cursor-default ${
+                        invoice.status === 'PAID' ? 'bg-green-100 text-green-700' : 
+                        invoice.status === 'UNPAID' ? 'bg-amber-100 text-amber-700' : 
+                        'bg-slate-100 text-slate-700'
+                      }`} variant="secondary">
+                        {invoice.status}
+                      </Badge>
+                      {invoice.status === 'UNPAID' && (invoice.expiresAt || invoice.dueDate) && new Date(invoice.expiresAt || invoice.dueDate) < new Date() && (
+                        <Badge variant="outline" className="bg-red-50 text-red-600 border-red-200 flex items-center gap-1 px-1.5 py-0">
+                          <AlertTriangle className="w-3 h-3" />
+                          Past Due
+                        </Badge>
+                      )}
+                    </div>
                     
                     <div className="flex gap-1">
                       <Button
@@ -698,7 +714,7 @@ export default function Dashboard() {
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setEmailPreviewInvoice(null)} disabled={isEmailSending}>Cancel</Button>
-            <Button onClick={handleSendEmail} disabled={isEmailSending} className="bg-indigo-600 hover:bg-indigo-700 text-white min-w-[100px]">
+            <Button onClick={handleSendEmail} disabled={isEmailSending} className="min-w-[100px]">
               {isEmailSending ? 'Sending...' : 'Send Email'}
             </Button>
           </DialogFooter>

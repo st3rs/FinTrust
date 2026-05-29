@@ -13,6 +13,7 @@ export interface Invoice {
   customerName: string;
   customerEmail: string;
   dueDate: string;
+  expiresAt?: string;
   createdAt: string;
   items: InvoiceItem[];
 }

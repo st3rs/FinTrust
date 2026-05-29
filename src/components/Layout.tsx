@@ -96,8 +96,8 @@ export default function Layout() {
                   to={item.path}
                   className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-all ${
                     isActive 
-                      ? 'bg-slate-100/70 shadow-sm dark:bg-slate-800 text-slate-900 dark:text-white' 
-                      : 'text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-white'
+                      ? 'bg-primary text-primary-foreground shadow-sm' 
+                      : 'text-slate-500 dark:text-slate-400 hover:bg-primary/10 hover:text-primary dark:hover:bg-primary/20 dark:hover:text-primary'
                   }`}
                 >
                   <Icon className="w-5 h-5" />
@@ -111,21 +111,26 @@ export default function Layout() {
         <div className="mt-auto p-6 space-y-6">
           <div className="w-full h-px bg-slate-200 dark:bg-slate-800"></div>
           <Button 
-            className="w-full bg-slate-900 hover:bg-black dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100 text-white shadow-sm flex items-center gap-2 h-9 rounded-md transition-all" 
+            className="w-full shadow-sm flex items-center gap-2 h-9 rounded-md transition-all" 
             onClick={() => navigate('/invoice/new')}
           >
             <Plus className="w-4 h-4" />
             {t.createInvoice}
           </Button>
 
-          <div className="flex items-center justify-between cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 p-2 -mx-2 rounded-lg transition-colors">
+          <div 
+            onClick={() => navigate('/login')}
+            className="flex items-center justify-between cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 p-2 -mx-2 rounded-lg transition-colors group"
+          >
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-400 flex items-center justify-center font-bold text-sm">
+              <div className="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold text-sm">
                 JD
               </div>
               <span className="text-sm font-medium dark:text-slate-200">John Doe</span>
             </div>
-            <ChevronDown className="w-4 h-4 text-slate-400" />
+            <div className="text-slate-400 group-hover:text-red-500 transition-colors">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+            </div>
           </div>
         </div>
       </aside>
@@ -141,7 +146,7 @@ export default function Layout() {
               <input 
                 type="text" 
                 placeholder={t.search}
-                className="w-full pl-9 pr-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all dark:focus:ring-indigo-500/40"
+                className="w-full pl-9 pr-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all dark:focus:ring-primary/40"
               />
             </div>
           </div>

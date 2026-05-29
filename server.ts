@@ -43,6 +43,21 @@ const db = {
       items: [
         { description: 'SEO Optimization', quantity: 1, price: 7500 }
       ]
+    },
+    {
+      id: 'inv_1003',
+      invoiceNumber: 'INV-2026-0003',
+      amount: 320.00,
+      currency: 'USD',
+      status: 'UNPAID',
+      customerName: 'Global Corp',
+      customerEmail: 'accounts@global.corp',
+      dueDate: '2026-05-10T00:00:00.000Z',
+      expiresAt: '2026-05-15T00:00:00.000Z',
+      createdAt: '2026-05-01T10:00:00.000Z',
+      items: [
+        { description: 'Server Maintenance', quantity: 2, price: 160 }
+      ]
     }
   ],
   logs: [] as ActivityLog[]
