@@ -34,6 +34,7 @@ import { Button } from '@/components/ui/button';
 import { ModeToggle } from './theme-toggle';
 import { LanguageToggle } from './language-toggle';
 import { useLanguage } from './language-provider';
+import { useAuth } from '../lib/auth-context';
 
 const translations = {
   en: {
@@ -93,6 +94,7 @@ export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { language } = useLanguage();
+  const { user, companyName, firstName, lastName, signOut, trialDaysLeft: realTrialDaysLeft } = useAuth();
   const t = translations[language] || translations.en;
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -112,18 +114,7 @@ export default function Layout() {
 
   const closeSidebar = () => setSidebarOpen(false);
 
-  const trialEndsAt = localStorage.getItem('trialEndsAt');
-  let trialDaysLeft = null;
-  if (trialEndsAt) {
-    const ends = new Date(trialEndsAt);
-    const now = new Date();
-    const diffTime = ends.getTime() - now.getTime();
-    if (diffTime > 0) {
-      trialDaysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    } else {
-      trialDaysLeft = 0; // Trial expired
-    }
-  }
+  const trialDaysLeft = realTrialDaysLeft;
 
   return (
     <div className="flex h-screen bg-[#f6f9fc] dark:bg-[#0a0a0b] text-slate-900 font-sans overflow-hidden">
@@ -139,12 +130,12 @@ export default function Layout() {
       <aside className={`fixed inset-y-0 left-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col z-30 shrink-0 w-64 transform transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:block ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="p-6 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-black dark:bg-white text-white dark:text-black rounded-md flex items-center justify-center font-bold text-xl">
+            <div className="w-10 h-10 bg-indigo-600 text-white rounded-md flex items-center justify-center font-bold text-xl">
               F
             </div>
             <div>
               <h1 className="font-bold text-lg leading-tight dark:text-white">FinTrust</h1>
-              <h2 className="font-bold text-sm leading-tight text-slate-500 dark:text-slate-400">Admin</h2>
+              <h2 className="font-semibold text-xs leading-tight text-slate-500 dark:text-slate-400 truncate max-w-[140px]">{companyName}</h2>
             </div>
           </div>
           <button className="lg:hidden text-slate-500 hover:text-slate-900 dark:hover:text-white" onClick={closeSidebar}>
@@ -191,20 +182,19 @@ export default function Layout() {
           </Button>
 
           <div 
-            onClick={() => {
+            onClick={async () => {
               closeSidebar();
-              localStorage.removeItem('isAuthenticated');
-              localStorage.removeItem('authMethod');
+              await signOut();
               navigate('/login');
             }}
             className="flex items-center justify-between cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 p-2 -mx-2 rounded-lg transition-colors group"
           >
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold text-sm">
-                {localStorage.getItem('authMethod') === 'github' ? <Key className="w-4 h-4" /> : 'JD'}
+            <div className="flex items-center gap-3 overflow-hidden">
+              <div className="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold text-sm shrink-0">
+                {firstName ? firstName[0]?.toUpperCase() : (user?.email ? user?.email[0]?.toUpperCase() : 'U')}
               </div>
               <span className="text-sm font-medium dark:text-slate-200 truncate pr-2">
-                {localStorage.getItem('authMethod') === 'github' ? 'GitHub User' : 'John Doe'}
+                {firstName ? `${firstName} ${lastName || ''}`.trim() : (user?.email ? user.email.split('@')[0] : 'Merchant User')}
               </span>
             </div>
             <div className="text-slate-400 group-hover:text-red-500 transition-colors shrink-0">
@@ -274,20 +264,19 @@ export default function Layout() {
             <DropdownMenu>
               <DropdownMenuTrigger render={
                 <button className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden ml-1 sm:ml-2 border border-slate-300 dark:border-slate-600 shrink-0 focus:outline-none focus:ring-2 focus:ring-primary/20 flex flex-col items-center justify-center">
-                   {localStorage.getItem('authMethod') === 'github' ? <Key className="w-4 h-4 text-slate-500" /> : <img src="https://ui-avatars.com/api/?name=John+Doe&background=random" alt="Avatar" className="w-full h-full object-cover" />}
+                   <img src={`https://ui-avatars.com/api/?name=${encodeURIComponent(firstName + ' ' + lastName)}&background=random`} alt="Avatar" className="w-full h-full object-cover" />
                 </button>
               } />
               <DropdownMenuContent align="end" className="w-[200px]">
                 <DropdownMenuGroup>
-                  <DropdownMenuLabel>{localStorage.getItem('authMethod') === 'github' ? 'GitHub Connected' : 'My Account'}</DropdownMenuLabel>
+                  <DropdownMenuLabel>{companyName}</DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={() => navigate('/settings')} className="cursor-pointer">Settings</DropdownMenuItem>
                   <DropdownMenuItem className="cursor-pointer">Billing</DropdownMenuItem>
                 </DropdownMenuGroup>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => {
-                  localStorage.removeItem('isAuthenticated');
-                  localStorage.removeItem('authMethod');
+                <DropdownMenuItem onClick={async () => {
+                  await signOut();
                   navigate('/login');
                 }} className="cursor-pointer text-red-600 focus:text-red-600 focus:bg-red-50 dark:focus:bg-red-950">Log out</DropdownMenuItem>
               </DropdownMenuContent>

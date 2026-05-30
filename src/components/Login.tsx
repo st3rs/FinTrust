@@ -4,39 +4,71 @@ import AuthLayout from './AuthLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Github } from 'lucide-react';
+import { Github, AlertCircle } from 'lucide-react';
+import { supabase } from '../lib/supabase';
+import { useAuth } from '../lib/auth-context';
 
 export default function Login() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isGithubLoading, setIsGithubLoading] = useState(false);
 
   useEffect(() => {
-    // Auto-redirect if already logged in
-    if (localStorage.getItem('isAuthenticated') === 'true') {
+    if (user) {
       navigate('/dashboard');
     }
-  }, [navigate]);
+  }, [user, navigate]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
     setIsLoading(true);
-    // Simulate login
-    setTimeout(() => {
-      localStorage.setItem('isAuthenticated', 'true');
-      localStorage.setItem('authMethod', 'email');
-      navigate('/dashboard');
-    }, 1000);
+    
+    try {
+      const { data, error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (authError) {
+        throw authError;
+      }
+
+      if (data?.session) {
+        localStorage.setItem('isAuthenticated', 'true');
+        localStorage.setItem('authMethod', 'email');
+        navigate('/dashboard');
+      }
+    } catch (err: any) {
+      console.error('Login error:', err);
+      setError(err?.message || 'Invalid email or password. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleGithubLogin = () => {
+  const handleGithubLogin = async () => {
+    setError('');
     setIsGithubLoading(true);
-    // Simulate GitHub OAuth flow
-    setTimeout(() => {
-      localStorage.setItem('isAuthenticated', 'true');
-      localStorage.setItem('authMethod', 'github');
-      navigate('/dashboard');
-    }, 1200);
+    try {
+      const { error: authError } = await supabase.auth.signInWithOAuth({
+        provider: 'github',
+        options: {
+          redirectTo: window.location.origin + '/dashboard',
+        }
+      });
+      if (authError) {
+        throw authError;
+      }
+    } catch (err: any) {
+      console.error('GitHub Auth error:', err);
+      setError(err?.message || 'Could not connect with GitHub. Please try again.');
+      setIsGithubLoading(false);
+    }
   };
 
   return (
@@ -44,10 +76,17 @@ export default function Login() {
       title="Sign in to your account" 
       subtitle={
         <React.Fragment>
-          Or <Link to="/register" className="font-medium text-primary hover:text-primary/80">start your 14-day free trial</Link>
+          Or <Link to="/register" className="font-medium text-primary hover:text-primary/80">start your 7-day free trial</Link>
         </React.Fragment>
       }
     >
+      {error && (
+        <div className="mb-6 p-4 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800/30 rounded-lg flex items-start gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
+          <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+          <div className="text-sm font-medium text-red-700 dark:text-red-300">{error}</div>
+        </div>
+      )}
+
       <form className="space-y-6" onSubmit={handleSubmit}>
         <div>
           <Label htmlFor="email" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
@@ -60,6 +99,8 @@ export default function Login() {
             autoComplete="email" 
             required 
             placeholder="you@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
             className="dark:bg-slate-950 dark:border-slate-800"
           />
         </div>
@@ -74,6 +115,8 @@ export default function Login() {
             type="password" 
             autoComplete="current-password" 
             required 
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
             className="dark:bg-slate-950 dark:border-slate-800"
           />
         </div>

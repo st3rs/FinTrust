@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { generatePromptPayQRBase64 } from '../lib/promptpay';
 import { motion, AnimatePresence } from 'motion/react';
 import { useLanguage } from './language-provider';
+import { useAuth } from '../lib/auth-context';
 import { Upload, Trash2, Image } from 'lucide-react';
 
 const translations = {
@@ -70,12 +71,13 @@ const translations = {
 };
 
 export default function Settings() {
-  const [promptPayId, setPromptPayId] = useState(localStorage.getItem('promptPayId') || '');
+  const { user, companyName: authCompanyName, updateMetadata } = useAuth();
+  const [promptPayId, setPromptPayId] = useState(user?.user_metadata?.promptpay_id || localStorage.getItem('promptPayId') || '');
   const [promptPayError, setPromptPayError] = useState('');
   const [qrPreview, setQrPreview] = useState<string | null>(null);
-  const [companyName, setCompanyName] = useState(localStorage.getItem('companyName') || 'FinTrust Corp.');
-  const [companyLogoUrl, setCompanyLogoUrl] = useState(localStorage.getItem('companyLogoUrl') || '');
-  const [companyLogo, setCompanyLogo] = useState(localStorage.getItem('companyLogo') || '');
+  const [companyName, setCompanyName] = useState(authCompanyName || 'FinTrust Corp.');
+  const [companyLogoUrl, setCompanyLogoUrl] = useState(user?.user_metadata?.logo_url || localStorage.getItem('companyLogoUrl') || '');
+  const [companyLogo, setCompanyLogo] = useState(user?.user_metadata?.company_logo || localStorage.getItem('companyLogo') || '');
   const [saveSuccess, setSaveSuccess] = useState('');
   const { language: lang, setLanguage: changeLanguage } = useLanguage();
 
@@ -89,12 +91,21 @@ export default function Settings() {
     }
   }, []);
 
-  const handleSaveCompany = () => {
-    localStorage.setItem('companyName', companyName);
-    localStorage.setItem('companyLogoUrl', companyLogoUrl);
-    localStorage.setItem('companyLogo', companyLogo);
-    setSaveSuccess(t.savedCompanyMsg);
-    setTimeout(() => setSaveSuccess(''), 3000);
+  const handleSaveCompany = async () => {
+    try {
+      await updateMetadata({
+        company_name: companyName,
+        logo_url: companyLogoUrl,
+        company_logo: companyLogo
+      });
+      localStorage.setItem('companyName', companyName);
+      localStorage.setItem('companyLogoUrl', companyLogoUrl);
+      localStorage.setItem('companyLogo', companyLogo);
+      setSaveSuccess(t.savedCompanyMsg);
+      setTimeout(() => setSaveSuccess(''), 3000);
+    } catch (err) {
+      console.error('Failed to save company settings:', err);
+    }
   };
 
   const handleLogoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -144,6 +155,9 @@ export default function Settings() {
     localStorage.setItem('promptPayId', promptPayId);
     
     try {
+      await updateMetadata({
+        promptpay_id: promptPayId
+      });
       const qrImage = await generatePromptPayQRBase64(promptPayId);
       setQrPreview(qrImage);
     } catch (err) {

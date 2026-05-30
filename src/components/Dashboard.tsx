@@ -37,6 +37,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Label } from '@/components/ui/label';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { useLanguage } from './language-provider';
+import { useDashboardMetrics } from '../lib/use-dashboard-metrics';
 
 const mockChartData = [
   { name: 'Jan', revenue: 15000, volume: 120 },
@@ -148,6 +149,26 @@ const QuickActions = () => (
 
 export default function Dashboard() {
   const { language } = useLanguage();
+  const {
+    loading,
+    monthlyVolume,
+    totalRevenue,
+    outstandingBalance,
+    successRate,
+    collectionRate,
+    activeCustomers,
+    activeLinks,
+    chartData,
+    recentTransactions
+  } = useDashboardMetrics();
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px] w-full">
+        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full space-y-8 pb-20">
@@ -171,10 +192,10 @@ export default function Dashboard() {
              <Activity className="h-4 w-4 text-slate-400" />
           </CardHeader>
           <CardContent>
-             <div className="text-3xl font-bold text-slate-900 dark:text-white">$145,230.00</div>
+             <div className="text-3xl font-bold text-slate-900 dark:text-white">{monthlyVolume.value}</div>
              <div className="flex items-center text-xs mt-1">
                <TrendingUp className="w-3 h-3 text-emerald-500 mr-1" />
-               <span className="text-emerald-600 font-medium">+15.3%</span>
+               <span className="text-emerald-600 font-medium">{monthlyVolume.percentage}</span>
                <span className="text-slate-500 ml-1">vs last month</span>
              </div>
           </CardContent>
@@ -187,10 +208,10 @@ export default function Dashboard() {
              <DollarSign className="h-4 w-4 text-slate-400" />
           </CardHeader>
           <CardContent>
-             <div className="text-3xl font-bold text-slate-900 dark:text-white">$890,500.00</div>
+             <div className="text-3xl font-bold text-slate-900 dark:text-white">{totalRevenue.value}</div>
              <div className="flex items-center text-xs mt-1">
                <TrendingUp className="w-3 h-3 text-emerald-500 mr-1" />
-               <span className="text-emerald-600 font-medium">+22.4%</span>
+               <span className="text-emerald-600 font-medium">{totalRevenue.percentage}</span>
                <span className="text-slate-500 ml-1">vs last year</span>
              </div>
           </CardContent>
@@ -203,9 +224,9 @@ export default function Dashboard() {
              <AlertTriangle className="h-4 w-4 text-amber-500" />
           </CardHeader>
           <CardContent>
-             <div className="text-3xl font-bold text-slate-900 dark:text-white">$34,100.00</div>
+             <div className="text-3xl font-bold text-slate-900 dark:text-white">{outstandingBalance.value}</div>
              <div className="flex items-center text-xs mt-1">
-               <span className="text-amber-600 font-medium mr-1">12 Invoices</span>
+               <span className="text-amber-600 font-medium mr-1">{outstandingBalance.percentage}</span>
                <span className="text-slate-500">pending collection</span>
              </div>
           </CardContent>
@@ -218,28 +239,28 @@ export default function Dashboard() {
           <CardContent className="p-4 sm:p-6 flex flex-col">
             <span className="text-xs font-semibold text-slate-500 mb-1 lg:hidden">Success Rate</span>
             <span className="text-sm font-semibold text-slate-500 mb-1 hidden lg:block">Success Rate</span>
-            <span className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">99.8%</span>
+            <span className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">{successRate}</span>
           </CardContent>
         </Card>
         <Card className="border-slate-200 dark:border-slate-800 shadow-sm">
           <CardContent className="p-4 sm:p-6 flex flex-col">
             <span className="text-xs font-semibold text-slate-500 mb-1 lg:hidden">Collection Rate</span>
             <span className="text-sm font-semibold text-slate-500 mb-1 hidden lg:block">Collection Rate</span>
-            <span className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">96.5%</span>
+            <span className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">{collectionRate}</span>
           </CardContent>
         </Card>
         <Card className="border-slate-200 dark:border-slate-800 shadow-sm">
           <CardContent className="p-4 sm:p-6 flex flex-col">
              <span className="text-xs font-semibold text-slate-500 mb-1 lg:hidden">Active Customers</span>
              <span className="text-sm font-semibold text-slate-500 mb-1 hidden lg:block">Active Customers</span>
-             <span className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">1,248</span>
+             <span className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">{activeCustomers}</span>
           </CardContent>
         </Card>
         <Card className="border-slate-200 dark:border-slate-800 shadow-sm">
           <CardContent className="p-4 sm:p-6 flex flex-col">
             <span className="text-xs font-semibold text-slate-500 mb-1 lg:hidden">Active Links</span>
             <span className="text-sm font-semibold text-slate-500 mb-1 hidden lg:block">Active Links</span>
-            <span className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">84</span>
+            <span className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">{activeLinks}</span>
           </CardContent>
         </Card>
       </div>
@@ -253,7 +274,7 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent className="flex-1 p-6 h-[300px] min-h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={mockChartData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+              <AreaChart data={chartData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
                 <defs>
                   <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.3}/>
@@ -304,7 +325,7 @@ export default function Dashboard() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {mockTransactions.map((tx) => (
+              {recentTransactions.map((tx) => (
                 <TableRow key={tx.id} className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
                   <TableCell className="px-4 sm:px-6">
                     <div className="flex items-center gap-2">

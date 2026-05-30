@@ -1,6 +1,6 @@
 {
-  "name": "FinTrust Alpha",
-  "description": "A modern, full-stack invoicing and client management solution with PromptPay, Crypto, and Card payment integrations.",
+  "name": "FinTrust",
+  "description": "FinTrust Payment Gateway for PromptPay QR, Dynamic QR Generation, Merchant Payments, and Financial Infrastructure.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

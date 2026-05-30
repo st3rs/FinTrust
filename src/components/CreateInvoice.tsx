@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../lib/auth-context';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { 
@@ -22,6 +23,7 @@ import {
 
 export default function CreateInvoice() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [step, setStep] = useState(1);
   const [items, setItems] = useState([{ description: '', quantity: 1, price: 0 }]);
   const [loading, setLoading] = useState(false);
@@ -60,7 +62,10 @@ export default function CreateInvoice() {
         amount: totalAmount,
         date: invoiceDate || new Date().toISOString().split('T')[0],
         status: 'UNPAID',
-        dueDate: new Date().toISOString().split('T')[0], // For simplicity assuming same or fallback
+        due_date: new Date().toISOString().split('T')[0],
+        dueDate: new Date().toISOString().split('T')[0],
+        user_id: user?.id,
+        metadata: { items, notes, taxRate }
       });
 
       if (error) throw error;

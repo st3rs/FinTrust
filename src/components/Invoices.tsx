@@ -6,26 +6,32 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../lib/auth-context';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
 
 export default function Invoices() {
+  const { user } = useAuth();
   const [invoices, setInvoices] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
 
   useEffect(() => {
-    fetchInvoices();
-  }, []);
+    if (user) {
+      fetchInvoices();
+    }
+  }, [user]);
 
   async function fetchInvoices() {
+    if (!user) return;
     try {
       setIsLoading(true);
       const { data, error } = await supabase
         .from('invoices')
         .select('*')
+        .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
       if (error) {
