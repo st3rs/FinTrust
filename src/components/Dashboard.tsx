@@ -368,21 +368,31 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-slate-900">{invoices.length}</div>
-            <p className="text-xs text-slate-500 font-medium mt-1">All time</p>
+            <p className="text-xs text-slate-500 font-medium mt-1">+4 this week</p>
+          </CardContent>
+        </Card>
+        <Card className="border-slate-200 shadow-sm">
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium text-slate-500">Active Clients</CardTitle>
+            <Users className="h-4 w-4 text-slate-400" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-slate-900">28</div>
+            <p className="text-xs text-emerald-600 font-medium mt-1">+2 since last month</p>
           </CardContent>
         </Card>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
         <Card className="border-slate-200 shadow-sm lg:col-span-2 h-[390px] flex flex-col">
-          <CardHeader className="shrink-0 pb-0 flex flex-row items-center justify-between">
+          <CardHeader className="shrink-0 pb-0 flex flex-row items-start sm:items-center justify-between gap-4">
             <div>
               <CardTitle className="text-lg">Revenue Trends</CardTitle>
               <CardDescription>Monthly payment growth visualization.</CardDescription>
             </div>
             <Dialog open={isRevenueDetailsOpen} onOpenChange={setIsRevenueDetailsOpen}>
               <DialogTrigger render={
-                <Button variant="outline" size="sm">
+                <Button variant="outline" size="sm" className="shrink-0">
                   View Details
                 </Button>
               } />

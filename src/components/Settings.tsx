@@ -243,18 +243,52 @@ export default function Settings() {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.95 }}
                   transition={{ duration: 0.2 }}
-                  className="mt-4 p-4 border border-slate-200 rounded-lg flex flex-col items-center justify-center bg-slate-50"
+                  className="qr-preview-container mt-4 p-4 border border-slate-200 rounded-lg flex flex-col items-center justify-center bg-slate-50"
                 >
                   <p className="text-xs font-semibold text-slate-700 mb-3">{t.qrPreview}</p>
                   <img src={qrPreview} alt="PromptPay QR Code Preview" className="w-32 h-32 bg-white rounded-lg p-1 border border-slate-200 shadow-sm mb-4" />
-                  <a
-                    href={qrPreview}
-                    download={`promptpay-qr-${promptPayId}.png`}
-                    className="w-full text-center bg-indigo-50 text-indigo-600 hover:bg-indigo-100 px-3 py-2 rounded-md text-sm font-medium transition-colors border border-indigo-200 flex items-center justify-center gap-2"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                    Download QR Code
-                  </a>
+                  <div className="flex w-full gap-2">
+                    <a
+                      href={qrPreview}
+                      download={`promptpay-qr-${promptPayId}.png`}
+                      className="flex-1 text-center bg-indigo-50 text-indigo-600 hover:bg-indigo-100 px-3 py-2 rounded-md text-sm font-medium transition-colors border border-indigo-200 flex items-center justify-center gap-1.5"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                      Download
+                    </a>
+                    <button
+                      onClick={async () => {
+                        try {
+                          const response = await fetch(qrPreview);
+                          const blob = await response.blob();
+                          await navigator.clipboard.write([
+                            new ClipboardItem({ [blob.type]: blob })
+                          ]);
+                          // Create a brief visual feedback
+                          const btn = document.activeElement as HTMLButtonElement;
+                          if (btn) {
+                            const originalText = btn.innerHTML;
+                            btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" class="text-emerald-600"><polyline points="20 6 9 17 4 12"></polyline></svg> <span class="text-emerald-700">Copied!</span>`;
+                            btn.classList.replace('text-slate-600', 'text-emerald-700');
+                            btn.classList.replace('bg-slate-50', 'bg-emerald-50');
+                            btn.classList.replace('border-slate-200', 'border-emerald-200');
+                            setTimeout(() => {
+                              btn.innerHTML = originalText;
+                              btn.classList.replace('text-emerald-700', 'text-slate-600');
+                              btn.classList.replace('bg-emerald-50', 'bg-slate-50');
+                              btn.classList.replace('border-emerald-200', 'border-slate-200');
+                            }, 2000);
+                          }
+                        } catch (err) {
+                          console.error("Failed to copy image:", err);
+                        }
+                      }}
+                      className="flex-1 text-center bg-slate-50 text-slate-600 hover:bg-slate-100 px-3 py-2 rounded-md text-sm font-medium transition-colors border border-slate-200 flex items-center justify-center gap-1.5"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                      Copy Image
+                    </button>
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>

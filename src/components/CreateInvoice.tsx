@@ -167,8 +167,9 @@ export default function CreateInvoice() {
                   </div>
 
                   {items.map((item, index) => (
-                    <div key={index} className="grid grid-cols-1 sm:grid-cols-12 gap-4 p-3 border-b border-slate-200 items-center relative group bg-white">
-                      <div className="col-span-1 sm:col-span-6">
+                    <div key={index} className="grid grid-cols-2 sm:grid-cols-12 gap-4 p-3 border-b border-slate-200 items-center relative group bg-white">
+                      <div className="col-span-2 sm:col-span-6">
+                         <label className="text-xs font-semibold text-slate-500 mb-1 block sm:hidden">Description</label>
                          <input 
                            type="text" 
                            placeholder="Service description..." 
@@ -178,26 +179,31 @@ export default function CreateInvoice() {
                          />
                       </div>
                       <div className="col-span-1 sm:col-span-2">
+                         <label className="text-xs font-semibold text-slate-500 mb-1 block sm:hidden">Qty</label>
                          <input 
                            type="number" 
                            min="1"
                            value={item.quantity || ''}
                            onChange={(e) => updateItem(index, 'quantity', parseInt(e.target.value) || 0)}
-                           className="w-full border border-slate-200 rounded px-2 py-2 text-sm text-center focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
+                           className="w-full border border-slate-200 rounded px-2 py-2 text-sm sm:text-center focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
                          />
                       </div>
                       <div className="col-span-1 sm:col-span-2 relative">
-                         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">$</span>
-                         <input 
-                           type="number" 
-                           min="0"
-                           step="0.01"
-                           value={item.price || ''}
-                           onChange={(e) => updateItem(index, 'price', parseFloat(e.target.value) || 0)}
-                           className="w-full border border-slate-200 rounded pl-6 pr-2 py-2 text-sm text-right focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
-                         />
+                         <label className="text-xs font-semibold text-slate-500 mb-1 block sm:hidden">Rate</label>
+                         <div className="relative">
+                           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">$</span>
+                           <input 
+                             type="number" 
+                             min="0"
+                             step="0.01"
+                             value={item.price || ''}
+                             onChange={(e) => updateItem(index, 'price', parseFloat(e.target.value) || 0)}
+                             className="w-full border border-slate-200 rounded pl-6 pr-2 py-2 text-sm sm:text-right focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
+                           />
+                         </div>
                       </div>
-                      <div className="col-span-1 sm:col-span-2 text-right pr-8 sm:pr-4 font-medium text-slate-900 text-sm">
+                      <div className="col-span-2 sm:col-span-2 sm:text-right pr-8 sm:pr-4 font-medium text-slate-900 text-sm flex items-center justify-between sm:block">
+                         <span className="text-xs font-semibold text-slate-500 sm:hidden">Amount</span>
                          ${(item.quantity * item.price).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
                       </div>
                       
@@ -205,7 +211,7 @@ export default function CreateInvoice() {
                         <button 
                           type="button" 
                           onClick={() => removeItem(index)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-300 hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+                          className="absolute right-3 top-2 sm:top-1/2 sm:-translate-y-1/2 text-slate-300 hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                         >
                           <X className="w-5 h-5" />
                         </button>
@@ -354,7 +360,7 @@ export default function CreateInvoice() {
                  <button 
                    type="button"
                    onClick={() => navigate('/dashboard')}
-                   className="px-6 py-2.5 border border-slate-200 bg-white text-slate-700 font-medium rounded-lg hover:bg-slate-50 transition-colors text-sm"
+                   className="w-full sm:w-auto px-6 py-2.5 border border-slate-200 bg-white text-slate-700 font-medium rounded-lg hover:bg-slate-50 transition-colors text-sm"
                  >
                    Save Draft
                  </button>
@@ -362,7 +368,7 @@ export default function CreateInvoice() {
                    type="button"
                    onClick={handleSubmit}
                    disabled={loading}
-                   className="px-6 py-2.5 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2 text-sm"
+                   className="w-full sm:w-auto px-6 py-2.5 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2 text-sm"
                  >
                    {loading ? 'Saving...' : 'Continue to Review'}
                    {!loading && <ArrowRight className="w-4 h-4" />}

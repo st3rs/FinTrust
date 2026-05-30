@@ -142,33 +142,33 @@ export default function PaymentPage() {
                   </CardHeader>
                   <CardContent>
                     <Tabs defaultValue="card" className="w-full">
-                      <TabsList className="grid w-full grid-cols-3 mb-6">
-                        <TabsTrigger value="card" className="flex items-center gap-2"><CreditCard className="w-4 h-4"/> Card</TabsTrigger>
-                        <TabsTrigger value="crypto" className="flex items-center gap-2"><Wallet className="w-4 h-4"/> Crypto</TabsTrigger>
-                        <TabsTrigger value="promptpay" className="flex items-center gap-2"><QrCode className="w-4 h-4"/> PromptPay</TabsTrigger>
+                      <TabsList className="flex flex-col sm:grid sm:w-full sm:grid-cols-3 mb-6 h-auto bg-slate-100 dark:bg-slate-800 p-1 rounded-lg gap-1">
+                        <TabsTrigger value="card" className="flex items-center justify-center gap-2 w-full"><CreditCard className="w-4 h-4"/> Card</TabsTrigger>
+                        <TabsTrigger value="crypto" className="flex items-center justify-center gap-2 w-full"><Wallet className="w-4 h-4"/> Crypto</TabsTrigger>
+                        <TabsTrigger value="promptpay" className="flex items-center justify-center gap-2 w-full"><QrCode className="w-4 h-4"/> PromptPay</TabsTrigger>
                       </TabsList>
                       
                       <TabsContent value="card" className="space-y-4">
                         <div className="space-y-2">
                           <Label>Card Information</Label>
                           <div className="relative">
-                            <Input placeholder="1234 5678 1234 5678" className="pl-10 font-mono" />
+                            <Input placeholder="1234 5678 1234 5678" className="pl-10 font-mono w-full" />
                             <CreditCard className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                           </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                           <div className="space-y-2">
                             <Label>Expiry</Label>
-                            <Input placeholder="MM/YY" className="font-mono" />
+                            <Input placeholder="MM/YY" className="font-mono w-full" />
                           </div>
                           <div className="space-y-2">
                             <Label>CVC</Label>
-                            <Input placeholder="123" className="font-mono" type="password" />
+                            <Input placeholder="123" className="font-mono w-full" type="password" />
                           </div>
                         </div>
                         <div className="space-y-2 pt-2">
                           <Label>Cardholder Name</Label>
-                          <Input placeholder="John Doe" />
+                          <Input placeholder="John Doe" className="w-full" />
                         </div>
                         <Button className="w-full mt-4" size="lg" disabled={processing} onClick={() => handlePay('stripe')}>
                           {processing ? 'Processing...' : `Pay ${invoice.amount.toLocaleString()} ${invoice.currency}`}
