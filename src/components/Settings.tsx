@@ -229,7 +229,6 @@ export default function Settings() {
                 onChange={(e) => {
                   setPromptPayId(e.target.value);
                   if (promptPayError) setPromptPayError(''); // clear error on type
-                  if (qrPreview) setQrPreview(null); // clear preview on type
                 }}
                 className={`w-full bg-white border ${promptPayError ? 'border-red-500 focus:ring-red-500/20 focus:border-red-500' : 'border-slate-200 focus:ring-indigo-500/20 focus:border-indigo-500'} rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 transition-all font-mono placeholder:font-sans`}
               />
@@ -243,9 +242,20 @@ export default function Settings() {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.95 }}
                   transition={{ duration: 0.2 }}
-                  className="qr-preview-container mt-4 p-4 border border-slate-200 rounded-lg flex flex-col items-center justify-center bg-slate-50"
+                  className="qr-preview-container mt-4 p-4 border border-slate-200 rounded-lg flex flex-col items-center justify-center bg-slate-50 relative"
                 >
-                  <p className="text-xs font-semibold text-slate-700 mb-3">{t.qrPreview}</p>
+                  <div className="flex w-full items-center justify-between mb-3 px-1">
+                    <p className="text-xs font-semibold text-slate-700">{t.qrPreview}</p>
+                    <span 
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                        /^\d+$/.test(promptPayId) && [10, 13, 15].includes(promptPayId.length)
+                          ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' 
+                          : 'bg-red-100 text-red-700 border border-red-200'
+                      }`}
+                    >
+                      {/^\d+$/.test(promptPayId) && [10, 13, 15].includes(promptPayId.length) ? 'Valid' : 'Invalid'}
+                    </span>
+                  </div>
                   <img src={qrPreview} alt="PromptPay QR Code Preview" className="w-32 h-32 bg-white rounded-lg p-1 border border-slate-200 shadow-sm mb-4" />
                   <div className="flex w-full gap-2">
                     <a

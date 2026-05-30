@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { ShieldCheck } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
-export default function AuthLayout({ children, title, subtitle }: { children: React.ReactNode, title: string, subtitle: string }) {
+export default function AuthLayout({ children, title, subtitle }: { children: React.ReactNode, title: string, subtitle?: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">

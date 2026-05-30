@@ -4,7 +4,6 @@ import {
   LayoutDashboard, 
   FileText, 
   Users, 
-  CreditCard, 
   Settings as SettingsIcon,
   Plus,
   Search,
@@ -13,8 +12,24 @@ import {
   Grid,
   Menu,
   X,
-  Terminal
+  Terminal,
+  ArrowRightLeft,
+  Link as LinkIcon,
+  QrCode,
+  Bitcoin,
+  LineChart,
+  Key,
+  Webhook
 } from 'lucide-react';
+import { 
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from './theme-toggle';
 import { LanguageToggle } from './language-toggle';
@@ -24,12 +39,19 @@ const translations = {
   en: {
     dashboard: 'Dashboard',
     invoices: 'Invoices',
-    clients: 'Clients',
+    clients: 'Customers',
     payments: 'Payments',
     apiDocs: 'API Docs',
     settings: 'Settings',
     createInvoice: 'Create Invoice',
     search: 'Search...',
+    transactions: 'Transactions',
+    paymentLinks: 'Payment Links',
+    promptpay: 'PromptPay QR',
+    crypto: 'Crypto Payments',
+    analytics: 'Analytics',
+    apiKeys: 'API Keys',
+    webhooks: 'Webhooks'
   },
   th: {
     dashboard: 'แผงควบคุม',
@@ -40,6 +62,13 @@ const translations = {
     settings: 'การตั้งค่า',
     createInvoice: 'สร้างใบแจ้งหนี้',
     search: 'ค้นหา...',
+    transactions: 'รายการธุรกรรม',
+    paymentLinks: 'ลิงก์ชำระเงิน',
+    promptpay: 'พร้อมเพย์คิวอาร์',
+    crypto: 'คริปโต',
+    analytics: 'การวิเคราะห์ข้อมูล',
+    apiKeys: 'คีย์ API',
+    webhooks: 'เว็บฮุก'
   },
   zh: {
     dashboard: '仪表板',
@@ -50,6 +79,13 @@ const translations = {
     settings: '设置',
     createInvoice: '创建发票',
     search: '搜索...',
+    transactions: '交易',
+    paymentLinks: '支付链接',
+    promptpay: 'PromptPay',
+    crypto: '加密货币',
+    analytics: '分析',
+    apiKeys: 'API 密钥',
+    webhooks: 'Webhooks'
   }
 };
 
@@ -64,8 +100,13 @@ export default function Layout() {
     { name: t.dashboard, path: '/dashboard', icon: LayoutDashboard },
     { name: t.invoices, path: '/invoices', icon: FileText, activePaths: ['/invoices', '/invoice/new'] },
     { name: t.clients, path: '/clients', icon: Users },
-    { name: t.payments, path: '/payments', icon: CreditCard },
-    { name: t.apiDocs, path: '/api-docs', icon: Terminal },
+    { name: t.transactions, path: '/transactions', icon: ArrowRightLeft },
+    { name: t.paymentLinks, path: '/payment-links', icon: LinkIcon },
+    { name: t.promptpay, path: '/promptpay', icon: QrCode },
+    { name: t.crypto, path: '/crypto', icon: Bitcoin },
+    { name: t.analytics, path: '/analytics', icon: LineChart },
+    { name: t.apiKeys, path: '/api-docs', icon: Key },
+    { name: t.webhooks, path: '/webhooks', icon: Webhook },
     { name: t.settings, path: '/settings', icon: SettingsIcon },
   ];
 
@@ -183,18 +224,53 @@ export default function Layout() {
               <LanguageToggle />
             </div>
             <ModeToggle />
-            <button className="hover:text-slate-900 dark:hover:text-slate-100 transition-colors hidden sm:block p-1.5 sm:p-2">
-              <Bell className="w-5 h-5 sm:w-5 sm:h-5" />
-            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger render={
+                <button className="hover:text-slate-900 dark:hover:text-slate-100 transition-colors hidden sm:block p-1.5 sm:p-2 relative">
+                  <Bell className="w-5 h-5 sm:w-5 sm:h-5" />
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full"></span>
+                </button>
+              } />
+              <DropdownMenuContent align="end" className="w-[280px]">
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>Notifications</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem className="cursor-pointer flex flex-col items-start gap-1 p-3">
+                    <span className="font-medium text-sm text-slate-900 dark:text-slate-100">Invoice paid!</span>
+                    <span className="text-xs text-slate-500">Global Tech paid $8,400</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem className="cursor-pointer flex flex-col items-start gap-1 p-3">
+                    <span className="font-medium text-sm text-slate-900 dark:text-slate-100">Overdue reminder</span>
+                    <span className="text-xs text-slate-500">Nexus Industries invoice is overdue.</span>
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
             <button className="hover:text-slate-900 dark:hover:text-slate-100 transition-colors hidden sm:block p-1.5 sm:p-2">
               <HelpCircle className="w-5 h-5 sm:w-5 sm:h-5" />
             </button>
             <button className="hover:text-slate-900 dark:hover:text-slate-100 transition-colors sm:hidden p-1.5">
               <Search className="w-5 h-5" />
             </button>
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden ml-1 sm:ml-2 border border-slate-300 dark:border-slate-600 shrink-0">
-               <img src="https://ui-avatars.com/api/?name=John+Doe&background=random" alt="Avatar" className="w-full h-full object-cover" />
-            </div>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger render={
+                <button className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden ml-1 sm:ml-2 border border-slate-300 dark:border-slate-600 shrink-0 focus:outline-none focus:ring-2 focus:ring-primary/20">
+                   <img src="https://ui-avatars.com/api/?name=John+Doe&background=random" alt="Avatar" className="w-full h-full object-cover" />
+                </button>
+              } />
+              <DropdownMenuContent align="end" className="w-[200px]">
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>My Account</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => navigate('/settings')} className="cursor-pointer">Settings</DropdownMenuItem>
+                  <DropdownMenuItem className="cursor-pointer">Billing</DropdownMenuItem>
+                </DropdownMenuGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => navigate('/login')} className="cursor-pointer text-red-600 focus:text-red-600 focus:bg-red-50 dark:focus:bg-red-950">Log out</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </header>
 

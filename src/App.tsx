@@ -7,10 +7,15 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import Dashboard from './components/Dashboard';
+import Transactions from './components/Transactions';
+import PaymentLinks from './components/PaymentLinks';
+import PromptPay from './components/PromptPay';
+import PlaceholderPage from './components/PlaceholderPage';
 import CreateInvoice from './components/CreateInvoice';
 import PaymentPage from './components/PaymentPage';
 import Settings from './components/Settings';
 import Clients from './components/Clients';
+import Invoices from './components/Invoices';
 import ApiDocs from './components/ApiDocs';
 import Login from './components/Login';
 import Register from './components/Register';
@@ -31,7 +36,13 @@ export default function App() {
             <Route element={<Layout />}>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/invoices" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/transactions" element={<Transactions />} />
+              <Route path="/payment-links" element={<PaymentLinks />} />
+              <Route path="/promptpay" element={<PromptPay />} />
+              <Route path="/crypto" element={<PlaceholderPage title="Crypto Payments" description="Accept and settle USDC and other cryptocurrencies." />} />
+              <Route path="/analytics" element={<PlaceholderPage title="Analytics" description="Detailed insights into revenue, conversion rates, and gateway performance." />} />
+              <Route path="/webhooks" element={<PlaceholderPage title="Webhooks" description="Configure endpoint URLs and monitor webhook deliveries." />} />
+              <Route path="/invoices" element={<Invoices />} />
               <Route path="/clients" element={<Clients />} />
               <Route path="/payments" element={<Navigate to="/dashboard" replace />} />
               <Route path="/invoice/new" element={<CreateInvoice />} />

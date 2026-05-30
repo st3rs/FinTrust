@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Download, Search, MoreHorizontal, UserPlus, Filter, FileSpreadsheet, ChevronDown, ChevronRight, FileText, Upload, Image as ImageIcon, X, Users, UserCheck, TrendingUp, TrendingDown, QrCode } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -53,6 +54,7 @@ const CLIENT_INVOICES: Record<string, any[]> = {
 };
 
 export default function Clients() {
+  const navigate = useNavigate();
   const [clients, setClients] = useState(INITIAL_CLIENTS);
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
@@ -433,7 +435,7 @@ export default function Clients() {
                           <DropdownMenuContent align="end" className="w-[160px]">
                             <DropdownMenuItem>View Details</DropdownMenuItem>
                             <DropdownMenuItem>Edit Client</DropdownMenuItem>
-                            <DropdownMenuItem>Create Invoice</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => navigate('/invoice/new')}>Create Invoice</DropdownMenuItem>
                             <DropdownMenuItem onClick={() => handleGenerateQR(client)}>
                               <QrCode className="w-4 h-4 mr-2 text-indigo-500" />
                               Generate QR
