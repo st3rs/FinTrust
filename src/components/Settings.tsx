@@ -2,12 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { generatePromptPayQRBase64 } from '../lib/promptpay';
 import { motion, AnimatePresence } from 'motion/react';
 import { useLanguage } from './language-provider';
+import { Upload, Trash2, Image } from 'lucide-react';
 
 const translations = {
   en: {
     companyProfileTitle: "Company Profile",
     companyProfileDesc: "Set your company details or brand name as the invoice issuer.",
     companyName: "Company / Brand Name",
+    companyLogoUrlLvl: "Company Logo URL (Fallback)",
+    companyLogoFileLvl: "Upload Logo Image",
     saveCompanyDetails: "Save Company Details",
     savedCompanyMsg: "Company details saved successfully",
     settingsTitle: "Settings",
@@ -41,23 +44,17 @@ const translations = {
     companyProfileTitle: "โปรไฟล์บริษัท",
     companyProfileDesc: "ตั้งค่ารายละเอียดบริษัทหรือชื่อแบรนด์ของคุณในฐานะผู้ออกใบแจ้งหนี้",
     companyName: "ชื่อบริษัท / แบรนด์",
+    companyLogoUrlLvl: "URL โลโก้บริษัท (สํารอง)",
+    companyLogoFileLvl: "อัปโหลดรูปภาพโลโก้",
     saveCompanyDetails: "บันทึกรายละเอียดบริษัท",
     savedCompanyMsg: "บันทึกรายละเอียดบริษัทแล้ว",
     settingsTitle: "การตั้งค่า",
-    gatewaysTitle: "ช่องทางการชำระเงิน",
-    gatewaysDesc: "กำหนดวิธีที่ลูกค้าใช้ชำระเงินสำหรับใบแจ้งหนี้ เชื่อมต่อผู้ให้บริการภายนอกอย่างปลอดภัย",
-    stripeDesc: "บัตรเครดิตและ ACH",
-    connected: "เชื่อมต่อแล้ว",
-    notConnected: "ยังไม่เชื่อมต่อ",
-    apiKeyVerify: "ตรวจสอบคีย์ API แล้ว",
-    liveKey: "คีย์เผยแพร่ที่ใช้งานจริง",
-    disconnect: "ยกเลิกการเชื่อมต่อ",
-    manageSettings: "จัดการการตั้งค่า",
+     manageSettings: "จัดการการตั้งค่า",
     paypalDesc: "การชำระเงินทั่วโลก",
-    paypalInfo: "เชื่อมต่อบัญชีธุรกิจ PayPal ของคุณเพื่อยอมรับการชำระเงินทั่วโลกโดยตรงในใบแจ้งหนี้ของคุณ",
+    paypalInfo: "เชื่อมต่อบัญชีธุรกิจ PayPal ของคุณเพื่อรับเงินทั่วโลกโดยตรงบนใบแจ้งหนี้ของคุณ",
     connectPaypal: "เชื่อมต่อ PayPal",
-    promptPayDesc: "โอนเงินผ่านธนาคารในประเทศ",
-    promptPayInfo: "ป้อนหมายเลขบัตรประจำตัวประชาชนหรือหมายเลขโทรศัพท์มือถือที่ลงทะเบียนพร้อมเพย์ เพื่อสร้างคิวอาร์โค้ดการชำระเงินบนใบแจ้งหนี้ของคุณโดยอัตโนมัติ",
+    promptPayDesc: "โอนเงินผ่านระบบพร้อมเพย์",
+    promptPayInfo: "ป้อนรหัสบัตรประชาชนหรือเบอร์โทรศัพท์มือถือที่ลงทะเบียนพร้อมเพย์ เพื่อคำนวณและสร้าง QR Code สำหรับชำระเงินบนใบแจ้งหนี้โดยอัตโนมัติ",
     promptPayId: "หมายเลขพร้อมเพย์",
     promptPayPlaceholder: "เช่น 0812345678 หรือ 1100...",
     saveDetails: "บันทึกรายละเอียด",
@@ -73,19 +70,62 @@ const translations = {
 };
 
 export default function Settings() {
-  const [promptPayId, setPromptPayId] = useState('');
+  const [promptPayId, setPromptPayId] = useState(localStorage.getItem('promptPayId') || '');
   const [promptPayError, setPromptPayError] = useState('');
   const [qrPreview, setQrPreview] = useState<string | null>(null);
   const [companyName, setCompanyName] = useState(localStorage.getItem('companyName') || 'FinTrust Corp.');
+  const [companyLogoUrl, setCompanyLogoUrl] = useState(localStorage.getItem('companyLogoUrl') || '');
+  const [companyLogo, setCompanyLogo] = useState(localStorage.getItem('companyLogo') || '');
   const [saveSuccess, setSaveSuccess] = useState('');
   const { language: lang, setLanguage: changeLanguage } = useLanguage();
 
   const t = translations[lang];
 
+  useEffect(() => {
+    if (promptPayId) {
+      generatePromptPayQRBase64(promptPayId)
+        .then(setQrPreview)
+        .catch(() => {});
+    }
+  }, []);
+
   const handleSaveCompany = () => {
     localStorage.setItem('companyName', companyName);
+    localStorage.setItem('companyLogoUrl', companyLogoUrl);
+    localStorage.setItem('companyLogo', companyLogo);
     setSaveSuccess(t.savedCompanyMsg);
     setTimeout(() => setSaveSuccess(''), 3000);
+  };
+
+  const handleLogoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 2 * 1024 * 1024) {
+        alert("File size must be less than 2MB");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setCompanyLogo(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleLogoDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file && file.type.startsWith('image/')) {
+      if (file.size > 2 * 1024 * 1024) {
+        alert("File size must be less than 2MB");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setCompanyLogo(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const handleSavePromptPay = async () => {
@@ -101,8 +141,7 @@ export default function Settings() {
     }
     
     setPromptPayError('');
-    // TODO: Actually save the ID
-    console.log('Saving PromptPay ID:', promptPayId);
+    localStorage.setItem('promptPayId', promptPayId);
     
     try {
       const qrImage = await generatePromptPayQRBase64(promptPayId);
@@ -163,10 +202,59 @@ export default function Settings() {
                 type="text" 
                 value={companyName}
                 onChange={(e) => setCompanyName(e.target.value)}
-                className="w-full bg-white border border-slate-200 focus:ring-indigo-500/20 focus:border-indigo-500 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 transition-all"
+                className="w-full bg-white border border-slate-200 focus:ring-indigo-500/20 focus:border-indigo-500 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 transition-all font-medium text-slate-800"
               />
             </div>
-            {saveSuccess && <p className="text-emerald-600 text-xs mt-1.5 font-medium">{saveSuccess}</p>}
+
+            <div>
+              <label className="block text-xs font-bold text-slate-900 mb-2">{t.companyLogoFileLvl}</label>
+              <div 
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={handleLogoDrop}
+                className="border-2 border-dashed border-slate-200 rounded-lg p-5 text-center bg-slate-50/50 hover:bg-slate-50 transition-colors flex flex-col items-center justify-center cursor-pointer relative min-h-[140px]"
+              >
+                {companyLogo ? (
+                  <div className="relative">
+                    <img src={companyLogo} alt="Company Logo" className="max-h-24 max-w-full rounded-lg object-contain shadow-sm" />
+                    <button 
+                      type="button" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCompanyLogo('');
+                      }}
+                      className="absolute -top-2 -right-2 p-1.5 bg-red-100 text-red-600 rounded-full hover:bg-red-200 transition-colors shadow-sm"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <label className="w-full h-full flex flex-col items-center justify-center cursor-pointer">
+                    <Upload className="w-6 h-6 text-slate-400 mb-2 animate-bounce" />
+                    <span className="text-xs font-semibold text-slate-700">Drag & drop logo here or click to upload</span>
+                    <span className="text-[10px] text-slate-400 mt-1">Recommended: JPG, PNG, or SVG (max 2MB)</span>
+                    <input 
+                      type="file" 
+                      accept="image/*" 
+                      onChange={handleLogoFileChange}
+                      className="hidden" 
+                    />
+                  </label>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-900 mb-2">{t.companyLogoUrlLvl}</label>
+              <input 
+                type="text" 
+                placeholder="https://example.com/logo.png"
+                value={companyLogoUrl}
+                onChange={(e) => setCompanyLogoUrl(e.target.value)}
+                className="w-full bg-white border border-slate-200 focus:ring-indigo-500/20 focus:border-indigo-500 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 transition-all font-mono text-xs text-slate-700 placeholder:font-sans placeholder:text-slate-400"
+              />
+            </div>
+
+            {saveSuccess && <p className="text-emerald-600 text-xs mt-1.5 font-semibold bg-emerald-50 px-3 py-1.5 rounded border border-emerald-100 flex items-center gap-1.5 animate-in fade-in zoom-in-95">✓ {saveSuccess}</p>}
           </div>
 
           <div className="mt-auto pt-6 border-t border-slate-100">

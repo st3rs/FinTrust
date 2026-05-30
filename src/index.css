@@ -130,3 +130,65 @@
     @apply font-sans;
     }
 }
+
+@media print {
+  /* Hide non-invoice elements securely */
+  aside, 
+  header, 
+  nav, 
+  button, 
+  .no-print, 
+  .bg-amber-100, 
+  div[class*="bg-amber-100"],
+  .print\:hidden {
+    display: none !important;
+  }
+
+  /* Reset layout constraints for body, html, and main elements */
+  html, body, #root, main, div {
+    background: white !important;
+    color: black !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    position: static !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+    width: auto !important;
+    max-width: 100% !important;
+    transform: none !important;
+    animation: none !important;
+    transition: none !important;
+  }
+
+  /* Reset main viewport constraints */
+  .h-screen, .flex-1, .overflow-y-auto {
+    height: auto !important;
+    overflow: visible !important;
+    position: static !important;
+  }
+
+  /* Styling for printable invoice layout card */
+  #printable-invoice-card {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+    padding: 40px !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: white !important;
+    color: black !important;
+    position: relative !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Force background colors and graphical assets in browsers */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
