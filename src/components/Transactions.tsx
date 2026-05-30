@@ -23,7 +23,7 @@ const mockTransactions = [
   { id: 'tx_3MtwBwLkdIwHu7ix28a3tqA2', type: 'payment', amount: 1250.00, currency: 'USD', status: 'pending', customer: 'Global Tech', method: 'promptpay', gateway: 'promptpay', date: '2026-05-29T14:15:00Z', fee: 0, net: 1250.00 },
   { id: 'tx_3MtwBwLkdIwHu7ix28a3tqA3', type: 'payment', amount: 85.00, currency: 'USD', status: 'failed', customer: 'StartUp Inc', method: 'crypto', gateway: 'crypto', date: '2026-05-28T09:30:00Z', fee: 0, net: 0 },
   { id: 'tx_3MtwBwLkdIwHu7ix28a3tqA4', type: 'payment', amount: 3400.00, currency: 'USD', status: 'succeeded', customer: 'Nexus Industries', method: 'card', gateway: 'paypal', date: '2026-05-27T16:45:00Z', fee: 102.30, net: 3297.70 },
-  { id: 'tx_3MtwBwLkdIwHu7ix28a3tqA5', type: 'refund', amount: -150.00, currency: 'USD', status: 'succeeded', customer: 'Wayne Corp', method: 'card', gateway: 'stripe', date: '2026-05-26T11:20:00Z', fee: -4.65, net: -145.35 },
+  { id: 'tx_3MtwBwLkdIwHu7ix28a3tqA5', type: 'refund', amount: -150.00, currency: 'USD', status: 'refunded', customer: 'Wayne Corp', method: 'card', gateway: 'stripe', date: '2026-05-26T11:20:00Z', fee: -4.65, net: -145.35 },
   { id: 'tx_3MtwBwLkdIwHu7ix28a3tqA6', type: 'payment', amount: 2100.00, currency: 'USD', status: 'succeeded', customer: 'Stark Enterprises', method: 'usdt', gateway: 'crypto', date: '2026-05-25T10:05:00Z', fee: 1.00, net: 2099.00 },
   { id: 'tx_3MtwBwLkdIwHu7ix28a3tqA7', type: 'payment', amount: 45.00, currency: 'USD', status: 'succeeded', customer: 'Jane Doe', method: 'card', gateway: 'stripe', date: '2026-05-24T18:30:00Z', fee: 1.61, net: 43.39 },
 ];
@@ -116,6 +116,7 @@ export default function Transactions() {
                     <div className="flex items-center gap-1.5">
                        {tx.status === 'succeeded' ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : 
                         tx.status === 'pending' ? <RotateCcw className="w-4 h-4 text-amber-500" /> :
+                        tx.status === 'refunded' ? <ArrowDownIcon className="w-4 h-4 text-blue-500" /> :
                         <AlertCircle className="w-4 h-4 text-red-500" />
                        }
                        <span className="font-medium capitalize text-slate-700 dark:text-slate-300 text-sm">

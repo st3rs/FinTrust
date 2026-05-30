@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { supabase } from '../lib/supabase';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { 
   User, 
-  Calendar, 
   Receipt, 
   PlusCircle, 
   X, 
@@ -10,12 +12,17 @@ import {
   CreditCard,
   Building,
   QrCode,
-  ArrowRight
+  ArrowRight,
+  ArrowLeft,
+  Download,
+  Send,
+  Eye
 } from 'lucide-react';
 
 export default function CreateInvoice() {
   const navigate = useNavigate();
-  const [items, setItems] = useState([{ description: '', quantity: 10, price: 150 }]);
+  const [step, setStep] = useState(1);
+  const [items, setItems] = useState([{ description: '', quantity: 1, price: 0 }]);
   const [loading, setLoading] = useState(false);
 
   // Default selections based on screenshot
@@ -25,6 +32,7 @@ export default function CreateInvoice() {
   const [notes, setNotes] = useState('');
   const [taxRate, setTaxRate] = useState(10);
   
+  const [CompanyIssuer] = useState(localStorage.getItem('companyName') || 'FinTrust Corp.');
   const [paymentMethods, setPaymentMethods] = useState({
     card: true,
     ach: false,
@@ -35,13 +43,98 @@ export default function CreateInvoice() {
   const tax = subtotal * (taxRate / 100);
   const totalAmount = subtotal + tax;
 
-  const handleSubmit = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
+  const handleContinueToReview = (e: React.FormEvent) => {
+    e.preventDefault();
+    setStep(2);
+  };
+
+  const handleSend = async () => {
     setLoading(true);
-    // Simulate save
-    setTimeout(() => {
-      navigate('/dashboard');
-    }, 1000);
+    try {
+      const generatedId = `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      
+      const { error } = await supabase.from('invoices').insert({
+        id: generatedId,
+        client: client || 'Acme Corp',
+        amount: totalAmount,
+        date: invoiceDate || new Date().toISOString().split('T')[0],
+        status: 'UNPAID',
+        dueDate: new Date().toISOString().split('T')[0], // For simplicity assuming same or fallback
+      });
+
+      if (error) throw error;
+      
+      navigate('/invoices');
+    } catch(err) {
+      console.error('Save error', err);
+      // Fallback
+      setTimeout(() => {
+        navigate('/invoices');
+      }, 1000);
+    }
+  };
+
+  const generatePDF = () => {
+    const doc = new jsPDF();
+    const invoiceId = `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    
+    // Add title
+    doc.setFontSize(22);
+    doc.text('INVOICE', 20, 20);
+    
+    // Add Company Issuer
+    doc.setFontSize(12);
+    doc.text(CompanyIssuer, 20, 30);
+    doc.setFontSize(10);
+    doc.text('123 Financial Ave, Suite 100', 20, 35);
+    doc.text('San Francisco, CA 94107', 20, 40);
+    
+    // Add invoice info aligned right
+    const pageWidth = doc.internal.pageSize.width;
+    doc.text(`Invoice Number: ${invoiceId}`, pageWidth - 20, 20, { align: 'right' });
+    doc.text(`Date: ${invoiceDate || new Date().toLocaleDateString()}`, pageWidth - 20, 25, { align: 'right' });
+    doc.text(`Due Date: ${dueDateType}`, pageWidth - 20, 30, { align: 'right' });
+    doc.text(`Status: UNPAID`, pageWidth - 20, 35, { align: 'right' });
+    
+    // Add client info
+    doc.setFontSize(12);
+    doc.text('Bill To:', 20, 55);
+    doc.setFontSize(10);
+    doc.text(client || 'Acme Corp', 20, 60);
+    
+    // Add table
+    const tableBody = items.map(item => [
+      item.description || 'Item Description',
+      item.quantity.toString(),
+      `$${item.price.toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+      `$${(item.quantity * item.price).toLocaleString(undefined, { minimumFractionDigits: 2 })}`
+    ]);
+
+    autoTable(doc, {
+      startY: 70,
+      head: [['Description', 'Qty', 'Price', 'Amount']],
+      body: tableBody,
+      foot: [
+        ['', '', 'Subtotal', `$${subtotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}`],
+        ['', '', `Tax (${taxRate}%)`, `$${tax.toLocaleString(undefined, { minimumFractionDigits: 2 })}`],
+        ['', '', 'Total', `$${totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}`]
+      ],
+      theme: 'grid',
+      headStyles: { fillColor: [79, 70, 229] },
+      footStyles: { fillColor: [248, 250, 252], textColor: [15, 23, 42] }
+    });
+
+    if (notes) {
+      // @ts-ignore - lastAutoTable exists on jsPDF instance
+      const finalY = doc.lastAutoTable.finalY || 100;
+      doc.setFontSize(10);
+      doc.text('Notes:', 20, finalY + 10);
+      doc.setFontSize(9);
+      doc.text(notes, 20, finalY + 15, { maxWidth: pageWidth - 40 });
+    }
+    
+    // Save the PDF
+    doc.save(`${invoiceId}.pdf`);
   };
 
   const addItem = () => setItems([...items, { description: '', quantity: 1, price: 0 }]);
@@ -60,37 +153,44 @@ export default function CreateInvoice() {
     <div className="flex-1 w-full bg-[#f8f9ff]">
       {/* Progress Stepper */}
       <div className="bg-white border-b border-slate-200 sticky top-0 z-10 hidden sm:block">
-        <div className="max-w-5xl mx-auto px-8 relative h-20 flex items-center justify-between">
+        <div className="max-w-3xl mx-auto px-8 relative h-20 flex items-center justify-between">
             <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-slate-200 -mt-2 -z-10 mx-16"></div>
-            <div className="absolute top-1/2 left-0 w-1/3 h-0.5 bg-indigo-600 -mt-2 -z-10 mx-16"></div>
+            <div className={`absolute top-1/2 left-0 h-0.5 bg-indigo-600 -mt-2 -z-10 mx-16 transition-all duration-500 ease-in-out ${step === 2 ? 'w-full' : 'w-1/2'}`}></div>
             
-            <div className="flex flex-col items-center gap-1 bg-white px-2">
-              <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-sm">1</div>
-              <span className="text-xs font-bold text-slate-900">Details</span>
+            <div className="flex flex-col items-center gap-1 bg-white px-2 cursor-pointer" onClick={() => setStep(1)}>
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm shadow-md transition-transform hover:scale-110 ${step === 1 ? 'bg-indigo-600 text-white shadow-indigo-200' : 'bg-slate-800 text-white shadow-slate-300'}`}>1</div>
+              <span className={`text-xs font-bold ${step === 1 ? 'text-indigo-600' : 'text-slate-900'}`}>Compose</span>
             </div>
             
-            <div className="flex flex-col items-center gap-1 bg-white px-2">
-              <div className="w-8 h-8 rounded-full bg-white border-2 border-slate-200 text-slate-500 flex items-center justify-center font-bold text-sm">2</div>
-              <span className="text-xs font-semibold text-slate-500">Items</span>
-            </div>
-
-            <div className="flex flex-col items-center gap-1 bg-white px-2">
-              <div className="w-8 h-8 rounded-full bg-white border-2 border-slate-200 text-slate-500 flex items-center justify-center font-bold text-sm">3</div>
-              <span className="text-xs font-semibold text-slate-500">Review</span>
+            <div className="flex flex-col items-center gap-1 bg-white px-2 cursor-pointer" onClick={() => { if (step === 1) setStep(2); }}>
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm transition-all duration-500 hover:scale-110 ${step === 2 ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200' : 'bg-white border-2 border-slate-200 text-slate-500'}`}>2</div>
+              <span className={`text-xs font-semibold ${step === 2 ? 'text-indigo-600' : 'text-slate-500'}`}>Preview & Send</span>
             </div>
         </div>
       </div>
 
       <div className="max-w-4xl mx-auto p-8 font-sans">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-slate-900 mb-2">Create New Invoice</h1>
-          <p className="text-slate-500">Draft a new professional invoice for your client.</p>
-        </div>
+        
+        {step === 1 && (
+        <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+          <div className="mb-8 flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold text-slate-900 mb-2">Create New Invoice</h1>
+              <p className="text-slate-500">Draft a new professional invoice for your client.</p>
+            </div>
+            <button 
+              type="button"
+              onClick={(e) => handleContinueToReview(e as any)}
+              className="hidden sm:flex px-4 py-2 bg-slate-100 text-indigo-600 font-medium rounded-lg hover:bg-slate-200 transition-colors items-center gap-2 text-sm"
+            >
+              <Eye className="w-4 h-4" /> Preview
+            </button>
+          </div>
 
-        <form onSubmit={handleSubmit}>
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm shadow-slate-200/50 shadow-sm overflow-hidden relative mb-12">
-            {/* Top blue accent line */}
-            <div className="absolute top-0 left-0 right-0 h-1 bg-indigo-600"></div>
+          <form onSubmit={handleContinueToReview}>
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm shadow-slate-200/50 overflow-hidden relative mb-12 transform transition-all">
+              {/* Top blue accent line */}
+              <div className="absolute top-0 left-0 right-0 h-1 bg-indigo-600"></div>
             
             <div className="p-8 sm:p-10 space-y-12">
               
@@ -103,15 +203,23 @@ export default function CreateInvoice() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="space-y-2">
-                    <label className="text-sm font-semibold text-slate-900">Select Client *</label>
-                    <select 
+                    <label className="text-sm font-semibold text-slate-900">Client Name *</label>
+                    <input 
+                      type="text"
+                      list="clients-list"
+                      placeholder="Select or enter client name..."
                       value={client}
                       onChange={e => setClient(e.target.value)}
                       className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white"
-                    >
-                      <option value="" disabled>Choose a client...</option>
-                      <option value="test">Acme Corp</option>
-                    </select>
+                      required
+                    />
+                    <datalist id="clients-list">
+                      <option value="Acme Corp" />
+                      <option value="Global Tech" />
+                      <option value="Nexus Industries" />
+                      <option value="Stark Enterprises" />
+                      <option value="Wayne Corp" />
+                    </datalist>
                   </div>
                   
                   <div className="space-y-2">
@@ -354,8 +462,7 @@ export default function CreateInvoice() {
                   </label>
                 </div>
               </section>
-
-              {/* Actions */}
+               {/* Actions */}
               <div className="pt-6 border-t border-slate-200 flex flex-col-reverse sm:flex-row justify-end gap-3 mt-4">
                  <button 
                    type="button"
@@ -365,19 +472,139 @@ export default function CreateInvoice() {
                    Save Draft
                  </button>
                  <button 
-                   type="button"
-                   onClick={handleSubmit}
-                   disabled={loading}
+                   type="submit"
                    className="w-full sm:w-auto px-6 py-2.5 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2 text-sm"
                  >
-                   {loading ? 'Saving...' : 'Continue to Review'}
-                   {!loading && <ArrowRight className="w-4 h-4" />}
+                   Continue to Review
+                   <ArrowRight className="w-4 h-4" />
                  </button>
               </div>
 
             </div>
           </div>
         </form>
+        </div>
+        )}
+
+        {step === 2 && (
+        <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex justify-between items-center mb-6">
+                <button onClick={() => setStep(1)} className="flex items-center text-sm text-slate-500 hover:text-slate-900 transition-colors">
+                    <ArrowLeft className="w-4 h-4 mr-1" /> Back to Edit
+                </button>
+                <div className="flex space-x-3">
+                    <button onClick={generatePDF} className="px-4 py-2 bg-white border border-slate-200 shadow-sm rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors flex items-center text-slate-700">
+                        <Download className="w-4 h-4 mr-2" /> Download PDF
+                    </button>
+                    <button onClick={handleSend} disabled={loading} className="px-6 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200 flex items-center">
+                        {loading ? 'Sending...' : <><Send className="w-4 h-4 mr-2" /> Send Invoice</>}
+                    </button>
+                </div>
+            </div>
+
+            <div className="bg-white rounded-xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 p-10 md:p-14 w-full relative overflow-hidden">
+                {/* watermark / decorative */}
+                <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-50/50 rounded-bl-[100px] -z-10"></div>
+                
+                <div className="flex justify-between items-start border-b border-slate-100 pb-10 mb-10">
+                    <div>
+                        <h1 className="text-4xl font-black text-slate-900 tracking-tight mb-2">INVOICE</h1>
+                        <p className="text-slate-500 font-medium tracking-wide">INV-2023-0042</p>
+                    </div>
+                    <div className="text-right flex flex-col items-end">
+                        <div className="w-14 h-14 bg-slate-900 rounded-xl mb-4 flex items-center justify-center text-white font-bold text-xl shadow-md uppercase">
+                          {CompanyIssuer.substring(0, 2)}
+                        </div>
+                        <p className="font-bold text-slate-900">{CompanyIssuer}</p>
+                        <p className="text-slate-500 text-sm mt-1">123 Financial Ave, Suite 100</p>
+                        <p className="text-slate-500 text-sm">San Francisco, CA 94107</p>
+                    </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row justify-between mb-12 gap-8">
+                    <div>
+                        <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Billed To</p>
+                        <p className="font-bold text-slate-900 text-lg">{client || 'Acme Corp'}</p>
+                        <p className="text-slate-500 text-sm mt-1">Client Address Details Here</p>
+                    </div>
+                    <div className="text-left sm:text-right space-y-4">
+                        <div>
+                            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Date Issued</p>
+                            <p className="font-medium text-slate-900">{invoiceDate || new Date().toISOString().split('T')[0]}</p>
+                        </div>
+                        <div>
+                            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Due Date</p>
+                            <p className="font-medium text-slate-900">{dueDateType}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse mb-8 min-w-[500px]">
+                      <thead>
+                          <tr className="border-y-2 border-slate-100 text-sm text-slate-900">
+                              <th className="py-4 font-bold uppercase tracking-wider text-xs text-slate-500 pl-4">Description</th>
+                              <th className="py-4 font-bold uppercase tracking-wider text-xs text-slate-500 text-center">Qty</th>
+                              <th className="py-4 font-bold uppercase tracking-wider text-xs text-slate-500 text-right">Price</th>
+                              <th className="py-4 font-bold uppercase tracking-wider text-xs text-slate-500 text-right pr-4">Amount</th>
+                          </tr>
+                      </thead>
+                      <tbody className="text-slate-700 text-sm">
+                          {items.map((item, i) => (
+                              <tr key={i} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50 transition-colors">
+                                  <td className="py-5 font-medium text-slate-900 pl-4">{item.description || 'Item Description'}</td>
+                                  <td className="py-5 text-center text-slate-600">{item.quantity}</td>
+                                  <td className="py-5 text-right text-slate-600">${item.price.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                                  <td className="py-5 text-right font-medium text-slate-900 pr-4">${(item.quantity * item.price).toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                              </tr>
+                          ))}
+                      </tbody>
+                  </table>
+                </div>
+
+                <div className="flex justify-end mb-12 mt-4 pr-4">
+                    <div className="w-full sm:w-1/2 max-w-sm space-y-4 text-sm">
+                        <div className="flex justify-between text-slate-500">
+                            <span>Subtotal</span>
+                            <span className="font-medium text-slate-900">${subtotal.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                        </div>
+                        <div className="flex justify-between text-slate-500 pb-4 border-b border-slate-100">
+                            <span>Tax ({taxRate}%)</span>
+                            <span className="font-medium text-slate-900">${tax.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                        </div>
+                        <div className="flex justify-between text-lg font-bold text-slate-900 items-end pt-2">
+                            <span>Total Due</span>
+                            <span className="text-3xl text-indigo-600">${totalAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="border-t border-slate-100 pt-8 flex flex-col sm:flex-row gap-8 bg-slate-50/50 -mx-10 md:-mx-14 px-10 md:px-14 pb-10 md:pb-14 -mb-10 md:-mb-14">
+                    {notes && (
+                        <div className="flex-1">
+                            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Notes</p>
+                            <p className="text-sm text-slate-600 italic leading-relaxed">"{notes}"</p>
+                        </div>
+                    )}
+                    <div className="flex-1">
+                        <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Payment Options</p>
+                        <div className="flex flex-wrap gap-2">
+                            {paymentMethods.card && <div className="flex items-center text-xs font-medium bg-white border border-slate-200 text-slate-600 px-3 py-2 rounded-md shadow-sm"><CreditCard className="w-3.5 h-3.5 mr-2 text-indigo-500" /> Credit Card</div>}
+                            {paymentMethods.ach && <div className="flex items-center text-xs font-medium bg-white border border-slate-200 text-slate-600 px-3 py-2 rounded-md shadow-sm"><Building className="w-3.5 h-3.5 mr-2 text-indigo-500" /> ACH Transfer</div>}
+                            {paymentMethods.qr && <div className="flex items-center text-xs font-medium bg-white border border-slate-200 text-slate-600 px-3 py-2 rounded-md shadow-sm"><QrCode className="w-3.5 h-3.5 mr-2 text-indigo-500" /> PromptPay QR</div>}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Stamp effect */}
+                <div className="absolute top-40 mx-auto right-10 bottom-0 pointer-events-none flex items-center justify-center -z-10 opacity-30 mix-blend-multiply">
+                    <div className="border-4 border-indigo-600/40 text-indigo-600/40 font-black text-6xl uppercase tracking-[0.2em] px-8 py-4 rotate-[-15deg] rounded-xl shadow-sm">
+                        DRAFT
+                    </div>
+                </div>
+            </div>
+        </div>
+        )}
       </div>
     </div>
   );

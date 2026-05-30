@@ -19,7 +19,8 @@ import {
   Wallet,
   Activity,
   History,
-  FileText
+  FileText,
+  Save
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -32,6 +33,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import generatePayload from 'promptpay-qr';
+import QRCode from 'qrcode';
+import jsPDF from 'jspdf';
 
 const mockRequests = [
   { id: 'req_pp_9A2bK', reference: 'REF-2026-001', customer: 'Anon. Customer', amount: 450.00, type: 'Dynamic', status: 'Paid', createdAt: '2026-05-30T04:20:00Z', expiresAt: '2026-05-30T04:35:00Z', paidAt: '2026-05-30T04:22:15Z' },
@@ -46,7 +50,14 @@ export default function PromptPay() {
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [isGenerateModalOpen, setIsGenerateModalOpen] = useState(false);
   const [qrType, setQrType] = useState('dynamic'); // 'dynamic' or 'static'
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedQR, setGeneratedQR] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
   const [formData, setFormData] = useState({
+    promptPayId: localStorage.getItem('defaultPromptPayId') || '',
+    merchantName: localStorage.getItem('defaultMerchantName') || localStorage.getItem('companyName') || 'FinTrust Merchant',
     amount: '',
     reference: `REF-${Math.floor(Math.random() * 10000)}`,
     description: '',
@@ -90,6 +101,112 @@ export default function PromptPay() {
     navigator.clipboard.writeText(`https://fintrust.app/pay/pp/${id}`);
   };
 
+  const handleGenerate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccessMessage(null);
+
+    // Basic validation
+    if (!formData.promptPayId) {
+      const err = 'กรุณาระบุหมายเลขพร้อมเพย์'; // Please specify PromptPay ID
+      setError(err);
+      console.error('Validation Error:', err);
+      return;
+    }
+    
+    if (formData.promptPayId.length !== 10 && formData.promptPayId.length !== 13) {
+      const err = 'หมายเลขพร้อมเพย์ต้องเป็น 10 หรือ 13 หลักเท่านั้น';
+      setError(err);
+      console.error('Validation Error:', err);
+      return;
+    }
+
+    if (qrType === 'dynamic' && !formData.amount) {
+      const err = 'Amount is required for dynamic QR';
+      setError(err);
+      console.error('Validation Error:', err);
+      return;
+    }
+
+    if (!formData.reference && qrType === 'dynamic') {
+       const err = 'Reference ID is required';
+       setError(err);
+       console.error('Validation Error:', err);
+       return;
+    }
+
+    setIsGenerating(true);
+    
+    try {
+      const amount = formData.amount ? parseFloat(formData.amount) : 0;
+      const payload = generatePayload(formData.promptPayId, { amount: amount > 0 ? amount : undefined });
+      
+      const qrDataUrl = await QRCode.toDataURL(payload, { 
+        width: 250, 
+        margin: 2,
+        color: {
+          dark: '#0f172a',
+          light: '#ffffff'
+        }
+      });
+      
+      setGeneratedQR(qrDataUrl);
+      setSuccessMessage('PromptPay QR generated successfully.');
+      console.log('Successfully generated PromptPay QR code', { ...formData, type: qrType });
+    } catch (err: any) {
+      console.error('Failed to generate PromptPay QR:', err);
+      setError('An error occurred while generating the QR code. Please try again.');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleSaveDefault = () => {
+    localStorage.setItem('defaultPromptPayId', formData.promptPayId);
+    localStorage.setItem('defaultMerchantName', formData.merchantName);
+    setSuccessMessage('Defaults saved successfully.');
+    setTimeout(() => setSuccessMessage(null), 3000);
+  };
+
+  const handleDownloadAll = async () => {
+    try {
+      const doc = new jsPDF();
+      let yOffset = 20;
+      doc.setFontSize(20);
+      doc.text('PromptPay QR Codes', 20, yOffset);
+      yOffset += 20;
+
+      for (let i = 0; i < filteredRequests.length; i++) {
+        const req = filteredRequests[i];
+        const targetPromptPayId = formData.promptPayId || '0123456789'; // Fallback
+        const payload = generatePayload(targetPromptPayId, { amount: req.amount > 0 ? req.amount : undefined });
+        const qrDataUrl = await QRCode.toDataURL(payload, { width: 100, margin: 1 });
+
+        if (yOffset > 250) {
+          doc.addPage();
+          yOffset = 20;
+        }
+
+        doc.setFontSize(14);
+        doc.text(`Reference: ${req.reference}`, 20, yOffset);
+        doc.setFontSize(10);
+        doc.text(`ID: ${req.id}`, 20, yOffset + 5);
+        doc.text(`Customer: ${req.customer}`, 20, yOffset + 10);
+        doc.text(`Amount: ${req.amount > 0 ? 'THB ' + req.amount : 'Any Amount'}`, 20, yOffset + 15);
+        doc.text(`Status: ${req.status}`, 20, yOffset + 20);
+        doc.text(`Type: ${req.type} QR`, 20, yOffset + 25);
+        
+        doc.addImage(qrDataUrl, 'PNG', 120, yOffset - 5, 50, 50);
+        
+        yOffset += 60;
+      }
+
+      doc.save('PromptPay_QRCodes.pdf');
+    } catch (err) {
+      console.error('Failed to download QR codes:', err);
+    }
+  };
+
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full space-y-6 pb-20">
       
@@ -99,19 +216,41 @@ export default function PromptPay() {
           <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white mb-1 tracking-tight">PromptPay QR</h1>
           <p className="text-slate-500 dark:text-slate-400 text-sm">Create, manage, and track PromptPay payment requests.</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-          <Button variant="outline" className="w-full sm:w-auto shadow-sm bg-white dark:bg-slate-900 hidden md:flex">
-            <FileText className="mr-2 h-4 w-4" />
-            Export
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full sm:w-auto">
+          <Button variant="outline" className="shadow-sm bg-white dark:bg-slate-900 hidden md:flex" onClick={handleDownloadAll}>
+            <Download className="mr-2 h-4 w-4" />
+            Download all QR codes
           </Button>
-          <Button onClick={() => { setQrType('static'); setIsGenerateModalOpen(true) }} variant="outline" className="w-[calc(50%-4px)] sm:w-auto shadow-sm border-indigo-200 text-indigo-700 hover:bg-indigo-50 dark:border-indigo-900 dark:text-indigo-400 dark:hover:bg-indigo-900/30">
-            <QrCode className="mr-2 h-4 w-4" />
-            Static QR
-          </Button>
-          <Button onClick={() => { setQrType('dynamic'); setIsGenerateModalOpen(true) }} className="w-[calc(50%-4px)] sm:w-auto shadow-sm">
-            <Plus className="mr-2 h-4 w-4" />
-            Generate QR
-          </Button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger render={
+              <Button className="w-full sm:w-auto bg-orange-500 hover:bg-orange-600 text-white border-transparent h-11 px-6 text-base font-medium shadow-md shadow-orange-200/50 dark:shadow-none hover:shadow-lg transition-all rounded-full">
+                <Plus className="mr-2 h-5 w-5" />
+                Create New QR
+              </Button>
+            } />
+            <DropdownMenuContent align="end" className="w-[240px] rounded-xl p-2">
+              <DropdownMenuItem 
+                className="cursor-pointer py-3 px-3 rounded-lg flex flex-col items-start gap-1 focus:bg-indigo-50 dark:focus:bg-indigo-900/40"
+                onClick={() => { setQrType('dynamic'); setIsGenerateModalOpen(true); }}
+              >
+                <div className="flex items-center font-medium text-slate-900 dark:text-slate-100">
+                  <Smartphone className="mr-2 h-4 w-4 text-indigo-500" /> Dynamic QR Request
+                </div>
+                <span className="text-[11px] text-slate-500 ml-6 leading-tight">Best for specific order amounts with an expiration timer.</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator className="my-1" />
+              <DropdownMenuItem 
+                className="cursor-pointer py-3 px-3 rounded-lg flex flex-col items-start gap-1 focus:bg-indigo-50 dark:focus:bg-indigo-900/40"
+                onClick={() => { setQrType('static'); setIsGenerateModalOpen(true); }}
+              >
+                <div className="flex items-center font-medium text-slate-900 dark:text-slate-100">
+                  <QrCode className="mr-2 h-4 w-4 text-slate-500 dark:text-slate-400" /> Static QR Code
+                </div>
+                <span className="text-[11px] text-slate-500 ml-6 leading-tight">Reusable, infinite scans. Best for tips and donations.</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
@@ -199,7 +338,9 @@ export default function PromptPay() {
                       <QrCode className="h-10 w-10 text-slate-300 dark:text-slate-600 mb-4" />
                       <p className="text-base font-medium text-slate-900 dark:text-slate-100">No requests found</p>
                       <p className="text-sm mt-1 mb-4">No PromptPay requests match your criteria.</p>
-                      <Button variant="outline" onClick={() => setIsGenerateModalOpen(true)}>Generate new QR</Button>
+                      <Button onClick={() => setIsGenerateModalOpen(true)} className="bg-orange-500 hover:bg-orange-600 text-white rounded-full px-6">
+                        <Plus className="mr-2 h-4 w-4" /> Create New QR
+                      </Button>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -293,7 +434,9 @@ export default function PromptPay() {
                 <QrCode className="h-8 w-8 mx-auto text-slate-300 dark:text-slate-600 mb-3" />
                 <p className="text-sm font-medium text-slate-900 dark:text-slate-100">No requests found</p>
                 <div className="mt-4">
-                  <Button variant="outline" size="sm" onClick={() => setIsGenerateModalOpen(true)}>Generate new QR</Button>
+                  <Button onClick={() => setIsGenerateModalOpen(true)} className="bg-orange-500 hover:bg-orange-600 text-white rounded-full">
+                    <Plus className="mr-2 h-4 w-4" /> Create New QR
+                  </Button>
                 </div>
              </div>
           ) : (
@@ -353,8 +496,8 @@ export default function PromptPay() {
         <DialogContent className="sm:max-w-[900px] p-0 overflow-hidden gap-0 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row h-[95vh] sm:h-[600px]">
           
           {/* Form Side */}
-          <div className="w-full sm:w-[450px] bg-white dark:bg-slate-950 p-6 flex flex-col h-full overflow-y-auto shrink-0 border-b sm:border-b-0 sm:border-r border-slate-200 dark:border-slate-800">
-            <DialogHeader className="mb-6 shrink-0">
+          <form onSubmit={handleGenerate} className="w-full sm:w-[450px] bg-white dark:bg-slate-950 p-6 flex flex-col h-full overflow-y-auto shrink-0 border-b sm:border-b-0 sm:border-r border-slate-200 dark:border-slate-800">
+            <DialogHeader className="mb-4 shrink-0">
               <DialogTitle className="text-xl">Generate PromptPay QR</DialogTitle>
               <DialogDescription>
                 Create a new payment request bridging to your account.
@@ -362,6 +505,16 @@ export default function PromptPay() {
             </DialogHeader>
             
             <div className="space-y-6 flex-1 pr-1">
+              {error && (
+                <div className="bg-red-50 text-red-600 border border-red-200 text-sm p-3 rounded-lg dark:bg-red-900/20 dark:border-red-900/50 dark:text-red-400">
+                  {error}
+                </div>
+              )}
+              {successMessage && (
+                <div className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-sm p-3 rounded-lg dark:bg-emerald-900/20 dark:border-emerald-900/50 dark:text-emerald-400">
+                  {successMessage}
+                </div>
+              )}
               
               <Tabs value={qrType} onValueChange={setQrType} className="w-full">
                 <TabsList className="grid w-full grid-cols-2 mb-4 bg-slate-100 dark:bg-slate-900">
@@ -371,6 +524,38 @@ export default function PromptPay() {
                 
                 {/* Dynamic Content Details */}
                 <TabsContent value="dynamic" className="space-y-5 animate-in fade-in-50">
+                  <div className="grid gap-2">
+                    <Label htmlFor="promptPayId" className="text-slate-700 dark:text-slate-300">PromptPay ID (Phone or National ID) *</Label>
+                    <Input 
+                      id="promptPayId" 
+                      placeholder="ใส่เบอร์โทร 10 หลัก หรือ เลขบัตรประชาชน 13 หลัก"
+                      value={formData.promptPayId}
+                      onChange={(e) => {
+                        const val = e.target.value.replace(/\D/g, '').slice(0, 13);
+                        setFormData({...formData, promptPayId: val});
+                      }}
+                      className={
+                        formData.promptPayId && !(formData.promptPayId.length === 10 || formData.promptPayId.length === 13)
+                          ? 'border-red-500 focus-visible:ring-red-500/20 text-red-600'
+                          : ''
+                      }
+                      required
+                    />
+                    <div className="flex justify-between">
+                      <p className="text-xs text-slate-500">ใช้เบอร์มือถือหรือเลขบัตร ปช. ที่ผูกกับพร้อมเพย์</p>
+                      <p className={`text-xs font-medium ${
+                        formData.promptPayId.length === 0 ? '' :
+                        formData.promptPayId.length === 10 || formData.promptPayId.length === 13 ? 'text-indigo-600' : 
+                        'text-red-500'
+                      }`}>
+                        {formData.promptPayId.length === 0 ? '' : 
+                         formData.promptPayId.length === 10 ? 'Phone Number Valid' : 
+                         formData.promptPayId.length === 13 ? 'National ID Valid' : 
+                         'Invalid length (Must be 10 or 13)'}
+                      </p>
+                    </div>
+                  </div>
+
                   <div className="grid gap-2">
                     <Label htmlFor="amount" className="text-slate-700 dark:text-slate-300">Amount (THB) *</Label>
                     <div className="relative">
@@ -407,6 +592,16 @@ export default function PromptPay() {
                       placeholder="Order #12345, Coffee, etc."
                       value={formData.description}
                       onChange={(e) => setFormData({...formData, description: e.target.value})}
+                    />
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label htmlFor="merchantName" className="text-slate-700 dark:text-slate-300">Merchant Name <span className="text-slate-400 font-normal">(Optional)</span></Label>
+                    <Input 
+                      id="merchantName" 
+                      placeholder="e.g. Coffee Shop"
+                      value={formData.merchantName}
+                      onChange={(e) => setFormData({...formData, merchantName: e.target.value})}
                     />
                   </div>
 
@@ -480,12 +675,27 @@ export default function PromptPay() {
             </div>
 
             <div className="pt-6 shrink-0 border-t border-slate-100 dark:border-slate-800 mt-4 flex items-center justify-between gap-3 bg-white dark:bg-slate-950">
-              <Button variant="ghost" onClick={() => setIsGenerateModalOpen(false)}>Cancel</Button>
-              <Button onClick={() => setIsGenerateModalOpen(false)}>
-                {qrType === 'dynamic' ? 'Create Dynamic QR' : 'Save Static QR'} <ArrowRight className="w-4 h-4 ml-2" />
-              </Button>
+              <Button type="button" variant="ghost" onClick={() => setIsGenerateModalOpen(false)}>Cancel</Button>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" onClick={handleSaveDefault} className="hidden sm:flex" title="Save Defaults">
+                  <Save className="h-4 w-4 mr-2" />
+                  Save Defaults
+                </Button>
+                <Button type="submit" disabled={isGenerating}>
+                  {isGenerating ? (
+                    <>
+                      <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      {qrType === 'dynamic' ? 'Create Dynamic QR' : 'Save Static QR'} <ArrowRight className="w-4 h-4 ml-2" />
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
-          </div>
+          </form>
 
           {/* Preview Side */}
           <div className="flex-1 bg-slate-100 p-6 sm:p-10 flex flex-col items-center justify-center relative min-h-[400px]">
@@ -501,18 +711,43 @@ export default function PromptPay() {
               
               <div className="p-6 flex flex-col items-center w-full">
                 
-                {/* QR Image Placeholder */}
-                <div className="bg-white p-2 border border-slate-200 rounded-lg shadow-sm mb-4 w-[200px] h-[200px] flex items-center justify-center">
-                  <div className="w-full h-full bg-slate-100 border-2 border-dashed border-slate-200 rounded flex flex-col items-center justify-center text-slate-400">
-                    <QrCode className="w-8 h-8 mb-2 opacity-50" />
-                    <span className="text-[10px] font-medium uppercase tracking-wider">Preview Only</span>
-                  </div>
+                {/* QR Image Placeholder or Generated QR */}
+                <div className={`qr-preview-container bg-white p-2 border ${
+                  formData.promptPayId && !(formData.promptPayId.length === 10 || formData.promptPayId.length === 13)
+                    ? 'border-red-500'
+                    : 'border-slate-200'
+                } rounded-lg shadow-sm mb-4 w-[200px] h-[200px] flex items-center justify-center relative transition-all duration-300 hover:scale-105 hover:shadow-[0_8px_30px_rgb(0,0,0,0.12)] cursor-default`}>
+                  <div 
+                    className={`absolute -top-2 -right-2 w-4 h-4 rounded-full border-2 border-white shadow-sm z-10 transition-colors duration-500 ease-in-out ${
+                      formData.promptPayId.length === 10 || formData.promptPayId.length === 13
+                        ? 'bg-emerald-500' 
+                        : 'bg-red-500'
+                    }`} 
+                    title={
+                      formData.promptPayId.length === 10 || formData.promptPayId.length === 13
+                        ? 'Valid PromptPay ID' 
+                        : 'Invalid PromptPay ID length'
+                    }
+                  />
+                  {generatedQR ? (
+                    <img src={generatedQR} alt="Generated PromptPay QR" className="w-full h-full object-contain" />
+                  ) : (
+                    <div className="w-full h-full bg-slate-100 border-2 border-dashed border-slate-200 rounded flex flex-col items-center justify-center text-slate-400">
+                      <QrCode className="w-8 h-8 mb-2 opacity-50" />
+                      <span className="text-[10px] font-medium uppercase tracking-wider">Preview Only</span>
+                    </div>
+                  )}
+                  {isGenerating && (
+                    <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center rounded-lg">
+                      <RefreshCw className="w-6 h-6 text-indigo-600 animate-spin" />
+                    </div>
+                  )}
                 </div>
                 
                 <div className="text-center w-full">
-                  <h3 className="font-bold text-slate-900 text-lg mb-1">FinTrust Merchant</h3>
+                  <h3 className="font-bold text-slate-900 text-lg mb-1">{formData.merchantName || 'FinTrust Merchant'}</h3>
                   
-                  {formData.amount && !formData.allowCustomAmount ? (
+                  {formData.amount && (!formData.allowCustomAmount || qrType === 'dynamic') ? (
                     <div className="text-2xl font-bold text-indigo-700 my-3">
                       ฿ {Number(formData.amount).toLocaleString(undefined, {minimumFractionDigits: 2})}
                     </div>

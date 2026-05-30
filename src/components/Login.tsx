@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import AuthLayout from './AuthLayout';
 import { Button } from '@/components/ui/button';
@@ -9,14 +9,34 @@ import { Github } from 'lucide-react';
 export default function Login() {
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
+  const [isGithubLoading, setIsGithubLoading] = useState(false);
+
+  useEffect(() => {
+    // Auto-redirect if already logged in
+    if (localStorage.getItem('isAuthenticated') === 'true') {
+      navigate('/dashboard');
+    }
+  }, [navigate]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     // Simulate login
     setTimeout(() => {
+      localStorage.setItem('isAuthenticated', 'true');
+      localStorage.setItem('authMethod', 'email');
       navigate('/dashboard');
     }, 1000);
+  };
+
+  const handleGithubLogin = () => {
+    setIsGithubLoading(true);
+    // Simulate GitHub OAuth flow
+    setTimeout(() => {
+      localStorage.setItem('isAuthenticated', 'true');
+      localStorage.setItem('authMethod', 'github');
+      navigate('/dashboard');
+    }, 1200);
   };
 
   return (
@@ -81,7 +101,7 @@ export default function Login() {
         <div>
           <Button 
             type="submit" 
-            disabled={isLoading}
+            disabled={isLoading || isGithubLoading}
             className="w-full flex justify-center"
           >
             {isLoading ? "Signing in..." : "Sign in"}
@@ -100,7 +120,7 @@ export default function Login() {
         </div>
 
         <div className="mt-6 grid grid-cols-2 gap-3">
-          <Button variant="outline" className="w-full dark:border-slate-800 dark:hover:bg-slate-800 dark:bg-slate-950 text-slate-700 dark:text-slate-300">
+          <Button variant="outline" type="button" className="w-full dark:border-slate-800 dark:hover:bg-slate-800 dark:bg-slate-950 text-slate-700 dark:text-slate-300">
             <svg className="mr-2 h-4 w-4" aria-hidden="true" viewBox="0 0 24 24">
               <path
                 d="M12.0003 4.75C13.7703 4.75 15.3553 5.36002 16.6053 6.54998L20.0303 3.125C17.9502 1.19 15.2353 0 12.0003 0C7.31028 0 3.25527 2.69 1.28027 6.60998L5.27028 9.70498C6.21525 6.86002 8.87028 4.75 12.0003 4.75Z"
@@ -122,12 +142,19 @@ export default function Login() {
             Google
           </Button>
 
-          <Button variant="outline" className="w-full dark:border-slate-800 dark:hover:bg-slate-800 dark:bg-slate-950 text-slate-700 dark:text-slate-300">
+          <Button 
+            variant="outline" 
+            type="button"
+            onClick={handleGithubLogin} 
+            disabled={isGithubLoading}
+            className="w-full dark:border-slate-800 dark:hover:bg-slate-800 dark:bg-slate-950 text-slate-700 dark:text-slate-300"
+          >
             <Github className="mr-2 h-4 w-4" />
-            GitHub
+            {isGithubLoading ? "Connecting..." : "GitHub"}
           </Button>
         </div>
       </div>
     </AuthLayout>
   );
 }
+

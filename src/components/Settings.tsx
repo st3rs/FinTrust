@@ -5,6 +5,11 @@ import { useLanguage } from './language-provider';
 
 const translations = {
   en: {
+    companyProfileTitle: "Company Profile",
+    companyProfileDesc: "Set your company details or brand name as the invoice issuer.",
+    companyName: "Company / Brand Name",
+    saveCompanyDetails: "Save Company Details",
+    savedCompanyMsg: "Company details saved successfully",
     settingsTitle: "Settings",
     gatewaysTitle: "Payment Gateways",
     gatewaysDesc: "Configure how your clients pay their invoices. Connect external providers securely.",
@@ -33,6 +38,11 @@ const translations = {
     thai: "Thai",
   },
   th: {
+    companyProfileTitle: "โปรไฟล์บริษัท",
+    companyProfileDesc: "ตั้งค่ารายละเอียดบริษัทหรือชื่อแบรนด์ของคุณในฐานะผู้ออกใบแจ้งหนี้",
+    companyName: "ชื่อบริษัท / แบรนด์",
+    saveCompanyDetails: "บันทึกรายละเอียดบริษัท",
+    savedCompanyMsg: "บันทึกรายละเอียดบริษัทแล้ว",
     settingsTitle: "การตั้งค่า",
     gatewaysTitle: "ช่องทางการชำระเงิน",
     gatewaysDesc: "กำหนดวิธีที่ลูกค้าใช้ชำระเงินสำหรับใบแจ้งหนี้ เชื่อมต่อผู้ให้บริการภายนอกอย่างปลอดภัย",
@@ -66,9 +76,17 @@ export default function Settings() {
   const [promptPayId, setPromptPayId] = useState('');
   const [promptPayError, setPromptPayError] = useState('');
   const [qrPreview, setQrPreview] = useState<string | null>(null);
+  const [companyName, setCompanyName] = useState(localStorage.getItem('companyName') || 'FinTrust Corp.');
+  const [saveSuccess, setSaveSuccess] = useState('');
   const { language: lang, setLanguage: changeLanguage } = useLanguage();
 
   const t = translations[lang];
+
+  const handleSaveCompany = () => {
+    localStorage.setItem('companyName', companyName);
+    setSaveSuccess(t.savedCompanyMsg);
+    setTimeout(() => setSaveSuccess(''), 3000);
+  };
 
   const handleSavePromptPay = async () => {
     // Basic validation for Thai PromptPay ID
@@ -123,6 +141,43 @@ export default function Settings() {
         </div>
         
         <p className="text-slate-500">{t.gatewaysDesc}</p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm shadow-slate-200/50 p-6 flex flex-col md:col-span-3">
+          <div className="flex justify-between items-start mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded bg-slate-100 text-slate-600 flex items-center justify-center font-bold">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+              </div>
+              <div>
+                <h3 className="font-bold text-lg leading-tight">{t.companyProfileTitle}</h3>
+                <p className="text-sm text-slate-500 leading-tight">{t.companyProfileDesc}</p>
+              </div>
+            </div>
+          </div>
+          <div className="mb-6 space-y-4 text-sm text-slate-600 max-w-md">
+            <div>
+              <label className="block text-xs font-bold text-slate-900 mb-2">{t.companyName}</label>
+              <input 
+                type="text" 
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+                className="w-full bg-white border border-slate-200 focus:ring-indigo-500/20 focus:border-indigo-500 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 transition-all"
+              />
+            </div>
+            {saveSuccess && <p className="text-emerald-600 text-xs mt-1.5 font-medium">{saveSuccess}</p>}
+          </div>
+
+          <div className="mt-auto pt-6 border-t border-slate-100">
+            <button 
+              className="bg-indigo-600 text-white hover:bg-indigo-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              onClick={handleSaveCompany}
+            >
+              {t.saveCompanyDetails}
+            </button>
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

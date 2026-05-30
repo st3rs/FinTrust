@@ -14,13 +14,18 @@ export default function Register() {
     setIsLoading(true);
     // Simulate registration
     setTimeout(() => {
+      localStorage.setItem('isAuthenticated', 'true');
+      localStorage.setItem('authMethod', 'email');
+      const trialEnds = new Date();
+      trialEnds.setDate(trialEnds.getDate() + 7);
+      localStorage.setItem('trialEndsAt', trialEnds.toISOString());
       navigate('/dashboard');
     }, 1000);
   };
 
   return (
     <AuthLayout 
-      title="Create your account" 
+      title="Start your 7-day free trial" 
       subtitle={
         <React.Fragment>
           Already have an account? <Link to="/login" className="font-medium text-primary hover:text-primary/80">Sign in</Link>
@@ -123,7 +128,7 @@ export default function Register() {
             disabled={isLoading}
             className="w-full flex justify-center"
           >
-            {isLoading ? "Creating account..." : "Create account"}
+            {isLoading ? "Starting trial..." : "Start 7-day free trial"}
           </Button>
         </div>
       </form>

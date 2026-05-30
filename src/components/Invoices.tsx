@@ -1,28 +1,101 @@
-import React, { useState } from 'react';
-import { Download, Search, PlusCircle, Filter } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Download, Search, PlusCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Link } from 'react-router-dom';
+import { supabase } from '../lib/supabase';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
-const INITIAL_INVOICES = [
-  { id: 'INV-2023-0042', client: 'Acme Corp', amount: 3500.00, date: '2026-05-15', status: 'PAID', dueDate: '2026-05-30' },
-  { id: 'INV-2023-0043', client: 'Global Tech', amount: 8400.00, date: '2026-05-18', status: 'PAID', dueDate: '2026-06-02' },
-  { id: 'INV-2023-0044', client: 'Nexus Industries', amount: 1250.00, date: '2026-05-20', status: 'UNPAID', dueDate: '2026-06-04' },
-  { id: 'INV-2023-0045', client: 'Stark Enterprises', amount: 45000.00, date: '2026-05-22', status: 'UNPAID', dueDate: '2026-06-06' },
-  { id: 'INV-2023-0046', client: 'Wayne Corp', amount: 15000.00, date: '2026-05-25', status: 'VOID', dueDate: '2026-06-09' },
-];
 
 export default function Invoices() {
-  const [invoices] = useState(INITIAL_INVOICES);
+  const [invoices, setInvoices] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
 
+  useEffect(() => {
+    fetchInvoices();
+  }, []);
+
+  async function fetchInvoices() {
+    try {
+      setIsLoading(true);
+      const { data, error } = await supabase
+        .from('invoices')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        throw error;
+      }
+
+      if (data) {
+        setInvoices(data);
+      }
+    } catch (error) {
+      console.error('Error fetching invoices:', error);
+      // Fallback data if table doesn't exist or permissions fail
+      setInvoices([
+        { id: 'INV-2023-0042', client: 'Acme Corp', amount: 3500.00, date: '2026-05-15', status: 'PAID', dueDate: '2026-05-30' },
+        { id: 'INV-2023-0043', client: 'Global Tech', amount: 8400.00, date: '2026-05-18', status: 'PAID', dueDate: '2026-06-02' },
+        { id: 'INV-2023-0044', client: 'Nexus Industries', amount: 1250.00, date: '2026-05-20', status: 'UNPAID', dueDate: '2026-06-04' },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  const generatePDF = (invoice: any) => {
+    const doc = new jsPDF();
+    const companyName = localStorage.getItem('companyName') || 'FinTrust Corp.';
+    
+    // Add title
+    doc.setFontSize(22);
+    doc.text('INVOICE', 20, 20);
+    
+    // Add Company Issuer
+    doc.setFontSize(12);
+    doc.text(companyName, 20, 30);
+    doc.setFontSize(10);
+    
+    // Add invoice info aligned right
+    const pageWidth = doc.internal.pageSize.width;
+    doc.text(`Invoice Number: ${invoice.id || 'INV-XXX'}`, pageWidth - 20, 20, { align: 'right' });
+    doc.text(`Date: ${new Date(invoice.date || invoice.created_at || Date.now()).toLocaleDateString()}`, pageWidth - 20, 25, { align: 'right' });
+    doc.text(`Due Date: ${new Date(invoice.dueDate || invoice.due_date || invoice.date || Date.now()).toLocaleDateString()}`, pageWidth - 20, 30, { align: 'right' });
+    doc.text(`Status: ${invoice.status}`, pageWidth - 20, 35, { align: 'right' });
+    
+    // Add client info
+    doc.setFontSize(12);
+    doc.text('Bill To:', 20, 50);
+    doc.setFontSize(10);
+    doc.text(invoice.client || 'Client', 20, 55);
+    
+    // Add table
+    autoTable(doc, {
+      startY: 70,
+      head: [['Description', 'Amount']],
+      body: [
+        ['Services Rendered', `$${invoice.amount?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '0.00'}`]
+      ],
+      foot: [
+        ['Total', `$${invoice.amount?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '0.00'}`]
+      ],
+      theme: 'grid',
+      headStyles: { fillColor: [79, 70, 229] }, // Indigo 600
+      footStyles: { fillColor: [248, 250, 252], textColor: [15, 23, 42] }
+    });
+    
+    // Save the PDF
+    doc.save(`${invoice.id || 'invoice'}.pdf`);
+  };
+
   const filteredInvoices = invoices.filter(inv => {
-    const matchesSearch = inv.id.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          inv.client.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = inv.id?.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          inv.client?.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === 'ALL' || inv.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
@@ -81,6 +154,7 @@ export default function Invoices() {
                 <TableHead>Date</TableHead>
                 <TableHead>Due Date</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -97,10 +171,10 @@ export default function Invoices() {
                       ${invoice.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </TableCell>
                     <TableCell className="text-slate-600 dark:text-slate-400">
-                      {new Date(invoice.date).toLocaleDateString()}
+                      {new Date(invoice.date || invoice.created_at || Date.now()).toLocaleDateString()}
                     </TableCell>
                     <TableCell className="text-slate-600 dark:text-slate-400">
-                      {new Date(invoice.dueDate).toLocaleDateString()}
+                      {new Date(invoice.dueDate || invoice.due_date || Date.now()).toLocaleDateString()}
                     </TableCell>
                     <TableCell>
                       <Badge 
@@ -114,11 +188,22 @@ export default function Invoices() {
                         {invoice.status}
                       </Badge>
                     </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => generatePDF(invoice)}
+                        title="Download PDF"
+                        className="text-slate-500 hover:text-primary dark:text-slate-400 dark:hover:text-primary"
+                      >
+                        <Download className="w-4 h-4" />
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-32 text-center text-slate-500 dark:text-slate-400">
+                  <TableCell colSpan={7} className="h-32 text-center text-slate-500 dark:text-slate-400">
                     No invoices found.
                   </TableCell>
                 </TableRow>

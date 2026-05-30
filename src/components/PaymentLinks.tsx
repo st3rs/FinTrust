@@ -549,7 +549,7 @@ export default function PaymentLinks() {
                 <div className="w-12 h-12 bg-indigo-600 rounded-xl mb-6 shadow-sm flex items-center justify-center">
                   <span className="text-xl font-bold text-white">F</span>
                 </div>
-                <div className="text-slate-500 text-sm font-medium mb-1">FinTrust Inc.</div>
+                <div className="text-slate-500 text-sm font-medium mb-1">{localStorage.getItem('companyName') || 'FinTrust Inc.'}</div>
                 <h2 className="text-xl font-bold text-slate-900 mb-6 leading-tight break-words">
                   {formData.name || 'Product / Service Name'}
                 </h2>

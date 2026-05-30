@@ -1,5 +1,5 @@
 {
-  "name": "InvoicePro Dashboard",
+  "name": "FinTrust Alpha",
   "description": "A modern, full-stack invoicing and client management solution with PromptPay, Crypto, and Card payment integrations.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

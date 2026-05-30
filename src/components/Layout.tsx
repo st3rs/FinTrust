@@ -112,6 +112,19 @@ export default function Layout() {
 
   const closeSidebar = () => setSidebarOpen(false);
 
+  const trialEndsAt = localStorage.getItem('trialEndsAt');
+  let trialDaysLeft = null;
+  if (trialEndsAt) {
+    const ends = new Date(trialEndsAt);
+    const now = new Date();
+    const diffTime = ends.getTime() - now.getTime();
+    if (diffTime > 0) {
+      trialDaysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    } else {
+      trialDaysLeft = 0; // Trial expired
+    }
+  }
+
   return (
     <div className="flex h-screen bg-[#f6f9fc] dark:bg-[#0a0a0b] text-slate-900 font-sans overflow-hidden">
       {/* Mobile Sidebar Overlay */}
@@ -180,15 +193,19 @@ export default function Layout() {
           <div 
             onClick={() => {
               closeSidebar();
+              localStorage.removeItem('isAuthenticated');
+              localStorage.removeItem('authMethod');
               navigate('/login');
             }}
             className="flex items-center justify-between cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 p-2 -mx-2 rounded-lg transition-colors group"
           >
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold text-sm">
-                JD
+                {localStorage.getItem('authMethod') === 'github' ? <Key className="w-4 h-4" /> : 'JD'}
               </div>
-              <span className="text-sm font-medium dark:text-slate-200 truncate pr-2">John Doe</span>
+              <span className="text-sm font-medium dark:text-slate-200 truncate pr-2">
+                {localStorage.getItem('authMethod') === 'github' ? 'GitHub User' : 'John Doe'}
+              </span>
             </div>
             <div className="text-slate-400 group-hover:text-red-500 transition-colors shrink-0">
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
@@ -256,23 +273,40 @@ export default function Layout() {
 
             <DropdownMenu>
               <DropdownMenuTrigger render={
-                <button className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden ml-1 sm:ml-2 border border-slate-300 dark:border-slate-600 shrink-0 focus:outline-none focus:ring-2 focus:ring-primary/20">
-                   <img src="https://ui-avatars.com/api/?name=John+Doe&background=random" alt="Avatar" className="w-full h-full object-cover" />
+                <button className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden ml-1 sm:ml-2 border border-slate-300 dark:border-slate-600 shrink-0 focus:outline-none focus:ring-2 focus:ring-primary/20 flex flex-col items-center justify-center">
+                   {localStorage.getItem('authMethod') === 'github' ? <Key className="w-4 h-4 text-slate-500" /> : <img src="https://ui-avatars.com/api/?name=John+Doe&background=random" alt="Avatar" className="w-full h-full object-cover" />}
                 </button>
               } />
               <DropdownMenuContent align="end" className="w-[200px]">
                 <DropdownMenuGroup>
-                  <DropdownMenuLabel>My Account</DropdownMenuLabel>
+                  <DropdownMenuLabel>{localStorage.getItem('authMethod') === 'github' ? 'GitHub Connected' : 'My Account'}</DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={() => navigate('/settings')} className="cursor-pointer">Settings</DropdownMenuItem>
                   <DropdownMenuItem className="cursor-pointer">Billing</DropdownMenuItem>
                 </DropdownMenuGroup>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => navigate('/login')} className="cursor-pointer text-red-600 focus:text-red-600 focus:bg-red-50 dark:focus:bg-red-950">Log out</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => {
+                  localStorage.removeItem('isAuthenticated');
+                  localStorage.removeItem('authMethod');
+                  navigate('/login');
+                }} className="cursor-pointer text-red-600 focus:text-red-600 focus:bg-red-50 dark:focus:bg-red-950">Log out</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
         </header>
+
+        {trialDaysLeft !== null && (
+          <div className="bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200 text-sm font-medium px-4 py-2 flex items-center justify-between shrink-0">
+            <span>
+              {trialDaysLeft > 0 
+                ? `You have ${trialDaysLeft} days left in your free trial.` 
+                : 'Your free trial has expired.'}
+            </span>
+            <Button size="sm" variant="outline" className="h-8 border-amber-300 dark:border-amber-700 bg-transparent hover:bg-amber-200 dark:hover:bg-amber-800/50">
+              Upgrade
+            </Button>
+          </div>
+        )}
 
         {/* Scrollable Content */}
         <main className="flex-1 overflow-y-auto w-full dark:bg-slate-950">
