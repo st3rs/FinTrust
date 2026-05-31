@@ -1,7 +1,10 @@
 {
-  "name": "react-example",
+  "name": "fintrust",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Full-stack invoice & payment platform for Thailand and ASEAN — PromptPay QR, USDT, Card",
+  "author": "TRST I Fin",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",

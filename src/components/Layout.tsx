@@ -170,6 +170,9 @@ export default function Layout() {
 
         <div className="mt-auto p-6 space-y-6">
           <div className="w-full h-px bg-slate-200 dark:bg-slate-800"></div>
+          <p className="text-[10px] text-slate-400 dark:text-slate-600 text-center tracking-wide select-none">
+            Powered by <span className="font-semibold text-slate-500 dark:text-slate-500">TRST I Fin</span>
+          </p>
           <Button 
             className="w-full shadow-sm flex items-center gap-2 h-9 rounded-md transition-all" 
             onClick={() => {
