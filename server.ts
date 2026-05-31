@@ -1,196 +1,507 @@
+import "dotenv/config";
 import express from "express";
 import path from "path";
 import cors from "cors";
 import { createServer as createViteServer } from "vite";
 import { randomUUID } from "crypto";
+import { supabaseAdmin, createUserClient } from "./lib/supabase.js";
+import { requireAuth, type AuthenticatedRequest } from "./middleware/auth.js";
 
-// --- EVENT BUS & SSE ---
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
 export interface ActivityLog {
   id: string;
-  type: 'api_request' | 'payment_confirmation' | 'webhook' | 'system';
+  type: "api_request" | "payment_confirmation" | "webhook" | "system";
   message: string;
-  metadata?: any;
+  metadata?: unknown;
   timestamp: string;
 }
 
-const db = {
-  invoices: [
-    {
-      id: 'inv_1001',
-      invoiceNumber: 'INV-2026-0001',
-      amount: 1540.00,
-      currency: 'USD',
-      status: 'UNPAID',
-      customerName: 'Acme Corp',
-      customerEmail: 'billing@acme.com',
-      dueDate: '2026-06-15T00:00:00.000Z',
-      createdAt: '2026-05-29T10:00:00.000Z',
-      items: [
-        { description: 'SaaS Platform Setup', quantity: 1, price: 1000 },
-        { description: 'Premium Support (Q2)', quantity: 3, price: 180 }
-      ]
-    },
-    {
-      id: 'inv_1002',
-      invoiceNumber: 'INV-2026-0002',
-      amount: 7500.00,
-      currency: 'THB',
-      status: 'PAID',
-      customerName: 'Sabai Digital',
-      customerEmail: 'hello@sabaidigital.th',
-      dueDate: '2026-05-28T00:00:00.000Z',
-      createdAt: '2026-05-21T10:00:00.000Z',
-      items: [
-        { description: 'SEO Optimization', quantity: 1, price: 7500 }
-      ]
-    },
-    {
-      id: 'inv_1003',
-      invoiceNumber: 'INV-2026-0003',
-      amount: 320.00,
-      currency: 'USD',
-      status: 'UNPAID',
-      customerName: 'Global Corp',
-      customerEmail: 'accounts@global.corp',
-      dueDate: '2026-05-10T00:00:00.000Z',
-      expiresAt: '2026-05-15T00:00:00.000Z',
-      createdAt: '2026-05-01T10:00:00.000Z',
-      items: [
-        { description: 'Server Maintenance', quantity: 2, price: 160 }
-      ]
-    }
-  ],
-  logs: [] as ActivityLog[]
-};
+// ---------------------------------------------------------------------------
+// SSE Client Registry — use Set to avoid duplicates & simplify cleanup
+// ---------------------------------------------------------------------------
 
-let clients: express.Response[] = [];
+const sseClients = new Set<express.Response>();
 
-function addLog(type: ActivityLog['type'], message: string, metadata?: any) {
+// In-memory ring buffer for recent logs (max 100).
+// This is intentionally in-memory — it's ephemeral activity feed, not durable storage.
+const recentLogs: ActivityLog[] = [];
+
+function addLog(
+  type: ActivityLog["type"],
+  message: string,
+  metadata?: unknown
+) {
   const log: ActivityLog = {
     id: randomUUID(),
     type,
     message,
     metadata,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   };
-  
-  db.logs.unshift(log);
-  if (db.logs.length > 100) db.logs.pop(); // Keep only last 100 logs
-  
-  // Broadcast to SSE clients
-  clients.forEach(client => client.write(`data: ${JSON.stringify(log)}\n\n`));
+
+  recentLogs.unshift(log);
+  if (recentLogs.length > 100) recentLogs.pop();
+
+  // Broadcast to all connected SSE clients
+  const payload = `data: ${JSON.stringify(log)}\n\n`;
+  for (const client of sseClients) {
+    try {
+      client.write(payload);
+    } catch {
+      // Client disconnected between writes — remove it
+      sseClients.delete(client);
+    }
+  }
 }
 
-// Add some initial logs
-addLog('system', 'System started');
-addLog('webhook', 'Webhook endpoint ready', { status: 'success' });
-addLog('webhook', 'Webhook failed: Invoice INV-2026-0001', { status: 'failed', eventId: 'evt_987654321', invoiceId: 'inv_1001' });
+// Startup logs
+addLog("system", "Server started");
+addLog("webhook", "Webhook endpoint ready", { status: "success" });
+
+// ---------------------------------------------------------------------------
+// Seed data helper — only used in dev when SEED_DB=true
+// ---------------------------------------------------------------------------
+
+async function seedDevData() {
+  if (process.env.SEED_DB !== "true") return;
+
+  // Check if any invoice already exists (skip if seeded)
+  const { count } = await supabaseAdmin
+    .from("invoices")
+    .select("*", { count: "exact", head: true });
+
+  if ((count ?? 0) > 0) {
+    console.log("[seed] Skipping — data already exists");
+    return;
+  }
+
+  console.log("[seed] Inserting seed invoices…");
+  await supabaseAdmin.from("invoices").insert([
+    {
+      id: randomUUID(),
+      client: "Acme Corp",
+      amount: 1540.0,
+      date: "2026-05-29",
+      due_date: "2026-06-15",
+      status: "UNPAID",
+      metadata: {
+        invoiceNumber: "INV-2026-0001",
+        currency: "USD",
+        customerEmail: "billing@acme.com",
+        items: [
+          { description: "SaaS Platform Setup", quantity: 1, price: 1000 },
+          { description: "Premium Support (Q2)", quantity: 3, price: 180 },
+        ],
+      },
+    },
+    {
+      id: randomUUID(),
+      client: "Sabai Digital",
+      amount: 7500.0,
+      date: "2026-05-21",
+      due_date: "2026-05-28",
+      status: "PAID",
+      metadata: {
+        invoiceNumber: "INV-2026-0002",
+        currency: "THB",
+        customerEmail: "hello@sabaidigital.th",
+        items: [{ description: "SEO Optimization", quantity: 1, price: 7500 }],
+      },
+    },
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// Express app
+// ---------------------------------------------------------------------------
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(cors());
   app.use(express.json());
 
-  // --- LOGGING MIDDLEWARE ---
-  app.use((req, res, next) => {
-    if (req.method !== 'GET' && !req.path.startsWith('/api/logs')) {
-      addLog('api_request', `${req.method} ${req.path}`, { body: req.body });
+  // Request logging middleware — skip GET and log-stream endpoints
+  app.use((req, _res, next) => {
+    if (req.method !== "GET" && !req.path.startsWith("/api/logs")) {
+      addLog("api_request", `${req.method} ${req.path}`, {
+        body: req.body,
+      });
     }
     next();
   });
 
-  // --- API ROUTES ---
+  // ---------------------------------------------------------------------------
+  // Public routes (no auth)
+  // ---------------------------------------------------------------------------
 
-  // SSE endpoint for live feed
-  app.get('/api/logs/stream', (req, res) => {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
+  // Health check
+  app.get("/api/health", (_req, res) => {
+    res.json({ status: "ok", ts: new Date().toISOString() });
+  });
+
+  // SSE live activity feed — public so the dashboard can show unauthenticated status
+  app.get("/api/logs/stream", (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
     res.flushHeaders();
 
-    // Send initial history
-    res.write(`data: ${JSON.stringify({ type: 'history', logs: db.logs })}\n\n`);
+    // Send buffered history on connect
+    res.write(
+      `data: ${JSON.stringify({ type: "history", logs: recentLogs })}\n\n`
+    );
 
-    clients.push(res);
+    sseClients.add(res);
 
-    req.on('close', () => {
-      clients = clients.filter(client => client !== res);
+    // Heartbeat every 25 s to prevent proxy timeouts
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(": heartbeat\n\n");
+      } catch {
+        clearInterval(heartbeat);
+        sseClients.delete(res);
+      }
+    }, 25_000);
+
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      sseClients.delete(res);
     });
   });
 
-  // Get all logs (fallback)
-  app.get("/api/logs", (req, res) => {
-    res.json({ data: db.logs });
+  // Fallback log fetch (non-streaming)
+  app.get("/api/logs", (_req, res) => {
+    res.json({ data: recentLogs });
   });
 
-  // Retry webhook endpoint
-  app.post("/api/webhooks/retry/:eventId", (req, res) => {
+  // ---------------------------------------------------------------------------
+  // Protected routes — all routes below require a valid Supabase JWT
+  // ---------------------------------------------------------------------------
+
+  const api = express.Router();
+  api.use(requireAuth);
+
+  // --- Invoices ---
+
+  api.get("/invoices", async (req, res) => {
+    const { userId } = req as AuthenticatedRequest;
+    const { data, error } = await supabaseAdmin
+      .from("invoices")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json({ data });
+  });
+
+  api.get("/invoices/:id", async (req, res) => {
+    const { userId } = req as unknown as AuthenticatedRequest;
+    const { data, error } = await supabaseAdmin
+      .from("invoices")
+      .select("*")
+      .eq("user_id", userId)
+      .or(`id.eq.${req.params.id},metadata->>invoiceNumber.eq.${req.params.id}`)
+      .maybeSingle();
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    if (!data) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    res.json({ data });
+  });
+
+  api.post("/invoices", async (req, res) => {
+    const { userId } = req as AuthenticatedRequest;
+    const body = req.body;
+
+    const newInvoice = {
+      id: randomUUID(),
+      client: body.customerName ?? "Unknown",
+      amount: Number(body.amount) || 0,
+      date: new Date().toISOString().split("T")[0],
+      due_date: body.dueDate
+        ? new Date(body.dueDate).toISOString().split("T")[0]
+        : null,
+      status: "UNPAID",
+      metadata: {
+        invoiceNumber: `INV-${new Date().getFullYear()}-${randomUUID().slice(0, 8).toUpperCase()}`,
+        currency: body.currency ?? "USD",
+        customerEmail: body.customerEmail ?? "",
+        items: body.items ?? [],
+      },
+      user_id: userId,
+    };
+
+    const { data, error } = await supabaseAdmin
+      .from("invoices")
+      .insert(newInvoice)
+      .select()
+      .single();
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.status(201).json({ data });
+  });
+
+  api.patch("/invoices/:id", async (req, res) => {
+    const { userId } = req as unknown as AuthenticatedRequest;
+    const { data, error } = await supabaseAdmin
+      .from("invoices")
+      .update(req.body)
+      .eq("id", req.params.id)
+      .eq("user_id", userId)
+      .select()
+      .single();
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    if (!data) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    res.json({ data });
+  });
+
+  api.delete("/invoices/:id", async (req, res) => {
+    const { userId } = req as unknown as AuthenticatedRequest;
+    const { error } = await supabaseAdmin
+      .from("invoices")
+      .delete()
+      .eq("id", req.params.id)
+      .eq("user_id", userId);
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json({ message: "Deleted" });
+  });
+
+  // --- Payments ---
+
+  api.post("/payments/:id/process", async (req, res) => {
+    const { userId } = req as unknown as AuthenticatedRequest;
+
+    // 1. Fetch invoice and verify ownership
+    const { data: inv, error: fetchErr } = await supabaseAdmin
+      .from("invoices")
+      .select("*")
+      .eq("id", req.params.id)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (fetchErr) {
+      res.status(500).json({ error: fetchErr.message });
+      return;
+    }
+    if (!inv) {
+      res.status(404).json({ error: "Invoice not found" });
+      return;
+    }
+    if (inv.status === "PAID") {
+      res.status(409).json({ error: "Invoice already paid" });
+      return;
+    }
+
+    // 2. Mark as PAID
+    const { data: updated, error: updateErr } = await supabaseAdmin
+      .from("invoices")
+      .update({ status: "PAID" })
+      .eq("id", inv.id)
+      .eq("user_id", userId)
+      .select()
+      .single();
+
+    if (updateErr) {
+      res.status(500).json({ error: updateErr.message });
+      return;
+    }
+
+    // 3. Record transaction
+    const txId = randomUUID();
+    await supabaseAdmin.from("transactions").insert({
+      id: txId,
+      invoice_id: inv.id,
+      client: inv.client,
+      amount: inv.amount,
+      currency: inv.metadata?.currency ?? "THB",
+      status: "Success",
+      payment_method: req.body.gateway ?? "Unknown",
+      user_id: userId,
+    });
+
+    addLog(
+      "payment_confirmation",
+      `Payment received for ${inv.metadata?.invoiceNumber ?? inv.id}`,
+      {
+        amount: inv.amount,
+        currency: inv.metadata?.currency,
+        invoiceId: inv.id,
+        gateway: req.body.gateway ?? "Unknown",
+        txId,
+      }
+    );
+
+    res.json({
+      data: updated,
+      message: `Payment processed via ${req.body.gateway ?? "Unknown"}`,
+      txId,
+    });
+  });
+
+  // --- Transactions ---
+
+  api.get("/transactions", async (req, res) => {
+    const { userId } = req as AuthenticatedRequest;
+    const { data, error } = await supabaseAdmin
+      .from("transactions")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json({ data });
+  });
+
+  // --- Customers ---
+
+  api.get("/customers", async (req, res) => {
+    const { userId } = req as AuthenticatedRequest;
+    const { data, error } = await supabaseAdmin
+      .from("customers")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json({ data });
+  });
+
+  api.post("/customers", async (req, res) => {
+    const { userId } = req as AuthenticatedRequest;
+    const { data, error } = await supabaseAdmin
+      .from("customers")
+      .insert({ ...req.body, id: randomUUID(), user_id: userId })
+      .select()
+      .single();
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.status(201).json({ data });
+  });
+
+  // --- Payment Links ---
+
+  api.get("/payment-links", async (req, res) => {
+    const { userId } = req as AuthenticatedRequest;
+    const { data, error } = await supabaseAdmin
+      .from("payment_links")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json({ data });
+  });
+
+  api.post("/payment-links", async (req, res) => {
+    const { userId } = req as AuthenticatedRequest;
+    const { data, error } = await supabaseAdmin
+      .from("payment_links")
+      .insert({ ...req.body, id: randomUUID(), user_id: userId })
+      .select()
+      .single();
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.status(201).json({ data });
+  });
+
+  // --- Webhook Retry ---
+
+  api.post("/webhooks/retry/:eventId", async (req, res) => {
     const { eventId } = req.params;
-    addLog('system', `Manual retry initiated for webhook ${eventId}`);
-    
-    // Simulate successful processing
+    addLog("system", `Manual retry initiated for webhook ${eventId}`);
+
     setTimeout(() => {
-      addLog('webhook', `Webhook retried successfully for ${eventId}`, { status: 'success', eventId });
-    }, 1500);
+      addLog("webhook", `Webhook retried successfully for ${eventId}`, {
+        status: "success",
+        eventId,
+      });
+    }, 1_500);
 
     res.json({ message: "Retry initiated", eventId });
   });
 
-  // Get all invoices
-  app.get("/api/invoices", (req, res) => {
-    res.json({ data: db.invoices });
-  });
+  // --- QR Payments ---
 
-  // Get single invoice
-  app.get("/api/invoices/:id", (req, res) => {
-    const inv = db.invoices.find(i => i.id === req.params.id || i.invoiceNumber === req.params.id);
-    if (inv) {
-      res.json({ data: inv });
-    } else {
-      res.status(404).json({ error: 'Not found' });
+  api.get("/qr-payments", async (req, res) => {
+    const { userId } = req as AuthenticatedRequest;
+    const { data, error } = await supabaseAdmin
+      .from("qr_payments")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
     }
+    res.json({ data });
   });
 
-  // Create invoice
-  app.post("/api/invoices", (req, res) => {
-    const nextId = db.invoices.length + 1;
-    const newInvoice = {
-      id: `inv_100${nextId}`,
-      invoiceNumber: `INV-2026-000${nextId}`,
-      amount: req.body.amount || 0,
-      currency: req.body.currency || 'USD',
-      status: 'UNPAID' as const,
-      customerName: req.body.customerName || 'Unknown',
-      customerEmail: req.body.customerEmail || '',
-      dueDate: req.body.dueDate || new Date().toISOString(),
-      createdAt: new Date().toISOString(),
-      items: req.body.items || []
-    };
-    db.invoices.unshift(newInvoice);
-    res.json({ data: newInvoice });
+  api.post("/qr-payments", async (req, res) => {
+    const { userId } = req as AuthenticatedRequest;
+    const { data, error } = await supabaseAdmin
+      .from("qr_payments")
+      .insert({ ...req.body, id: randomUUID(), user_id: userId })
+      .select()
+      .single();
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.status(201).json({ data });
   });
 
-  // Pay invoice (Mock Webhook / Action)
-  app.post("/api/payments/:id/process", (req, res) => {
-    const inv = db.invoices.find(i => i.id === req.params.id || i.invoiceNumber === req.params.id);
-    if (!inv) return res.status(404).json({ error: 'Not found' });
-    
-    // In a real app, this creates a Stripe/PayPal intent or returns crypto QR
-    inv.status = 'PAID';
-    
-    addLog('payment_confirmation', `Payment received for ${inv.invoiceNumber}`, { 
-      amount: inv.amount, 
-      currency: inv.currency,
-      invoiceId: inv.id,
-      gateway: req.body.gateway || 'Unknown'
-    });
-    
-    res.json({ data: inv, message: `Payment processed via ${req.body.gateway || 'Unknown'}` });
-  });
+  // Mount protected router
+  app.use("/api", api);
 
-  // Vite middleware for development
+  // ---------------------------------------------------------------------------
+  // Static / Vite middleware
+  // ---------------------------------------------------------------------------
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -198,16 +509,18 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get('*all', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+    app.get("*all", (_req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`✅  FinTrust server running → http://localhost:${PORT}`);
   });
+
+  await seedDevData();
 }
 
 startServer();
