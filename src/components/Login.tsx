@@ -45,7 +45,11 @@ export default function Login() {
       }
     } catch (err: any) {
       console.error('Login error:', err);
-      setError(err?.message || 'Invalid email or password. Please try again.');
+      if (err?.message === 'Failed to fetch') {
+        setError('Connection failed. Please ensure your Supabase URL (VITE_SUPABASE_URL) and Anon Key (VITE_SUPABASE_ANON_KEY) are configured in the Secrets panel.');
+      } else {
+        setError(err?.message || 'Invalid email or password. Please try again.');
+      }
     } finally {
       setIsLoading(false);
     }
