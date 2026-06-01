@@ -1021,7 +1021,15 @@ async function startServer() {
       { onConflict: "user_id,gateway" }
     );
 
-    if (error) { res.status(500).json({ error: error.message }); return; }
+    if (error) {
+      if (error.code === "42P01") {
+        // Table doesn't exist yet — remind to run migration
+        res.status(503).json({ error: "Database migration required. Run migrations/001_gateway_configs.sql in your Supabase SQL Editor first." });
+      } else {
+        res.status(500).json({ error: error.message });
+      }
+      return;
+    }
 
     addLog("system", `Stripe connected for user ${userId}`, { environment });
     res.json({ connected: true, environment });
@@ -1035,12 +1043,18 @@ async function startServer() {
 
   api.get("/gateways/stripe/status", async (req, res) => {
     const { userId } = req as unknown as AuthenticatedRequest;
-    const { data } = await supabaseAdmin
+    const { data, error } = await supabaseAdmin
       .from("gateway_configs")
       .select("publishable_key, environment, updated_at")
       .eq("user_id", userId)
       .eq("gateway", "stripe")
       .maybeSingle();
+
+    // If table doesn't exist yet, return not connected (migration pending)
+    if (error?.code === "42P01") {
+      res.json({ connected: false, publishableKey: null, environment: null, connectedAt: null, migrationPending: true });
+      return;
+    }
 
     res.json({
       connected: Boolean(data),
