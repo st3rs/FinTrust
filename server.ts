@@ -4,6 +4,7 @@ import path from "path";
 import cors from "cors";
 import { createServer as createViteServer } from "vite";
 import { randomUUID } from "crypto";
+import Stripe from "stripe";
 import { supabaseAdmin, createUserClient } from "./lib/supabase.js";
 import { requireAuth, type AuthenticatedRequest } from "./middleware/auth.js";
 
@@ -115,6 +116,32 @@ async function seedDevData() {
 }
 
 // ---------------------------------------------------------------------------
+// PayPal helper — reused by create-order and capture-order routes
+// ---------------------------------------------------------------------------
+
+function paypalBaseURL(): string {
+  return process.env.PAYPAL_ENVIRONMENT === "live"
+    ? "https://api-m.paypal.com"
+    : "https://api-m.sandbox.paypal.com";
+}
+
+async function getPayPalToken(): Promise<string> {
+  const res = await fetch(`${paypalBaseURL()}/v1/oauth2/token`, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${Buffer.from(
+        `${process.env.PAYPAL_CLIENT_ID}:${process.env.PAYPAL_CLIENT_SECRET}`
+      ).toString("base64")}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: "grant_type=client_credentials",
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description ?? "PayPal auth failed");
+  return data.access_token;
+}
+
+// ---------------------------------------------------------------------------
 // Express app
 // ---------------------------------------------------------------------------
 
@@ -123,7 +150,226 @@ async function startServer() {
   const PORT = Number(process.env.PORT) || 3000;
 
   app.use(cors());
+
+  // ── Stripe webhook ── raw body MUST come before express.json() ──────────
+  // Stripe signs the raw payload; parsing it first breaks signature verification.
+  app.post(
+    "/api/stripe/webhook",
+    express.raw({ type: "application/json" }),
+    async (req, res) => {
+      if (!process.env.STRIPE_SECRET_KEY || !process.env.STRIPE_WEBHOOK_SECRET) {
+        res.status(503).json({ error: "Stripe not configured" });
+        return;
+      }
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+      const sig = req.headers["stripe-signature"];
+      let event: Stripe.Event;
+      try {
+        event = stripe.webhooks.constructEvent(
+          req.body,
+          sig!,
+          process.env.STRIPE_WEBHOOK_SECRET
+        );
+      } catch (err: any) {
+        addLog("webhook", `Stripe signature verification failed: ${err.message}`);
+        res.status(400).send(`Webhook Error: ${err.message}`);
+        return;
+      }
+
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object as Stripe.Checkout.Session;
+        const { invoiceId, userId } = session.metadata ?? {};
+        if (invoiceId && userId) {
+          await supabaseAdmin
+            .from("invoices")
+            .update({ status: "PAID" })
+            .eq("id", invoiceId)
+            .eq("user_id", userId);
+
+          await supabaseAdmin.from("transactions").insert({
+            id: randomUUID(),
+            invoice_id: invoiceId,
+            amount: (session.amount_total ?? 0) / 100,
+            currency: session.currency?.toUpperCase() ?? "USD",
+            status: "Success",
+            payment_method: "Card",
+            client: session.customer_details?.name ?? session.customer_details?.email ?? "Customer",
+            user_id: userId,
+          });
+
+          addLog("payment_confirmation", `Stripe payment confirmed: ${invoiceId}`, {
+            sessionId: session.id,
+            amount: session.amount_total,
+          });
+        }
+      }
+      res.json({ received: true });
+    }
+  );
+
   app.use(express.json());
+
+  // ── Gateway status — public, no auth ────────────────────────────────────
+  app.get("/api/gateways/status", (_req, res) => {
+    const stripeOk = Boolean(process.env.STRIPE_SECRET_KEY);
+    const paypalOk = Boolean(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_SECRET);
+    res.json({
+      stripe: {
+        connected: stripeOk,
+        mode: process.env.STRIPE_SECRET_KEY?.startsWith("sk_live_") ? "live" : stripeOk ? "test" : null,
+      },
+      paypal: {
+        connected: paypalOk,
+        environment: paypalOk ? (process.env.PAYPAL_ENVIRONMENT ?? "sandbox") : null,
+      },
+      promptpay: { connected: true, mode: "local" },
+    });
+  });
+
+  // ── Public payment routes — for customers (no auth required) ────────────
+  // Customers pay via /pay/:id, they don't have Supabase sessions.
+
+  app.post("/api/public/stripe/create-checkout", async (req, res) => {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      res.status(503).json({ error: "Stripe is not configured on this server. Add STRIPE_SECRET_KEY to environment variables." });
+      return;
+    }
+    const { invoiceId } = req.body as { invoiceId: string };
+    const { data: inv } = await supabaseAdmin
+      .from("invoices")
+      .select("*")
+      .eq("id", invoiceId)
+      .maybeSingle();
+
+    if (!inv) { res.status(404).json({ error: "Invoice not found" }); return; }
+    if (inv.status === "PAID") { res.status(409).json({ error: "Invoice already paid" }); return; }
+
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+    const currency = (inv.metadata?.currency ?? "usd").toLowerCase();
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card"],
+      line_items: [{
+        price_data: {
+          currency,
+          product_data: {
+            name: inv.metadata?.invoiceNumber ?? `Invoice ${inv.id.slice(0, 8).toUpperCase()}`,
+            description: `Payment from ${inv.client}`,
+          },
+          unit_amount: Math.round(Number(inv.amount) * 100),
+        },
+        quantity: 1,
+      }],
+      customer_email: inv.metadata?.customerEmail ?? undefined,
+      success_url: `${process.env.APP_URL}/pay/${invoiceId}?stripe=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.APP_URL}/pay/${invoiceId}`,
+      metadata: { invoiceId: inv.id, userId: inv.user_id },
+    });
+
+    addLog("api_request", `Stripe checkout session created for invoice ${invoiceId}`);
+    res.json({ url: session.url });
+  });
+
+  app.post("/api/public/paypal/create-order", async (req, res) => {
+    if (!process.env.PAYPAL_CLIENT_ID || !process.env.PAYPAL_CLIENT_SECRET) {
+      res.status(503).json({ error: "PayPal is not configured on this server. Add PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET to environment variables." });
+      return;
+    }
+    const { invoiceId } = req.body as { invoiceId: string };
+    const { data: inv } = await supabaseAdmin
+      .from("invoices")
+      .select("*")
+      .eq("id", invoiceId)
+      .maybeSingle();
+
+    if (!inv) { res.status(404).json({ error: "Invoice not found" }); return; }
+    if (inv.status === "PAID") { res.status(409).json({ error: "Invoice already paid" }); return; }
+
+    try {
+      const token = await getPayPalToken();
+      const r = await fetch(`${paypalBaseURL()}/v2/checkout/orders`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "PayPal-Request-Id": randomUUID(),
+        },
+        body: JSON.stringify({
+          intent: "CAPTURE",
+          purchase_units: [{
+            reference_id: invoiceId,
+            custom_id: `${inv.id}|${inv.user_id}`,
+            amount: {
+              currency_code: (inv.metadata?.currency ?? "USD").toUpperCase(),
+              value: Number(inv.amount).toFixed(2),
+            },
+            description: `${inv.metadata?.invoiceNumber ?? inv.id} — ${inv.client}`,
+          }],
+          application_context: { shipping_preference: "NO_SHIPPING" },
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok) { res.status(500).json({ error: "Failed to create PayPal order", detail: data }); return; }
+      res.json({ orderId: data.id });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/public/paypal/capture-order/:orderId", async (req, res) => {
+    if (!process.env.PAYPAL_CLIENT_ID || !process.env.PAYPAL_CLIENT_SECRET) {
+      res.status(503).json({ error: "PayPal not configured" });
+      return;
+    }
+    try {
+      const token = await getPayPalToken();
+      const r = await fetch(`${paypalBaseURL()}/v2/checkout/orders/${req.params.orderId}/capture`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      });
+      const data = await r.json();
+
+      if (!r.ok || data.status !== "COMPLETED") {
+        res.status(500).json({ error: "PayPal capture failed", detail: data });
+        return;
+      }
+
+      const pu = data.purchase_units?.[0];
+      const [invoiceId, userId] = (pu?.custom_id ?? "").split("|");
+      const capture = pu?.payments?.captures?.[0];
+
+      if (invoiceId && userId) {
+        const { data: inv } = await supabaseAdmin
+          .from("invoices")
+          .update({ status: "PAID" })
+          .eq("id", invoiceId)
+          .eq("user_id", userId)
+          .select()
+          .single();
+
+        if (inv) {
+          await supabaseAdmin.from("transactions").insert({
+            id: randomUUID(),
+            invoice_id: invoiceId,
+            amount: parseFloat(capture?.amount?.value ?? String(inv.amount)),
+            currency: capture?.amount?.currency_code ?? inv.metadata?.currency ?? "USD",
+            status: "Success",
+            payment_method: "PayPal",
+            client: inv.client,
+            user_id: userId,
+          });
+          addLog("payment_confirmation", `PayPal payment captured: ${invoiceId}`, {
+            orderId: req.params.orderId,
+            captureId: capture?.id,
+          });
+        }
+      }
+      res.json({ status: "COMPLETED" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 
   // Request logging middleware — skip GET and log-stream endpoints
   app.use((req, _res, next) => {

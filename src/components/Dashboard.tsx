@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, useReducedMotion } from 'motion/react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -226,14 +226,64 @@ function MethodBadge({ method }: { method: string }) {
 
 // ─── Gateway health ───────────────────────────────────────────────────────
 
-const GATEWAYS = [
-  { name: 'Stripe', latency: '45ms', status: 'operational' as const },
-  { name: 'PayPal', latency: '120ms', status: 'operational' as const },
-  { name: 'PromptPay', latency: '85ms', status: 'operational' as const },
-  { name: 'Crypto Pay', latency: 'High Load', status: 'degraded' as const },
-];
+interface GatewayRow {
+  name: string;
+  status: 'connected' | 'disconnected' | 'local';
+  detail: string;
+}
 
 function GatewayHealth() {
+  const [rows, setRows] = useState<GatewayRow[]>([
+    { name: 'Stripe', status: 'disconnected', detail: 'Checking…' },
+    { name: 'PayPal', status: 'disconnected', detail: 'Checking…' },
+    { name: 'PromptPay', status: 'local', detail: 'Client-side' },
+    { name: 'Crypto Pay', status: 'local', detail: 'USDT TRC-20' },
+  ]);
+
+  useEffect(() => {
+    fetch('/api/gateways/status')
+      .then((r) => r.json())
+      .then((d) => {
+        setRows([
+          {
+            name: 'Stripe',
+            status: d.stripe?.connected ? 'connected' : 'disconnected',
+            detail: d.stripe?.connected
+              ? d.stripe.mode === 'live' ? 'Live mode' : 'Test mode'
+              : 'Not configured',
+          },
+          {
+            name: 'PayPal',
+            status: d.paypal?.connected ? 'connected' : 'disconnected',
+            detail: d.paypal?.connected
+              ? d.paypal.environment === 'live' ? 'Live mode' : 'Sandbox'
+              : 'Not configured',
+          },
+          { name: 'PromptPay', status: 'local', detail: 'Client-side' },
+          { name: 'Crypto Pay', status: 'local', detail: 'USDT TRC-20' },
+        ]);
+      })
+      .catch(() => {}); // keep defaults on network error
+  }, []);
+
+  const dotClass = (status: GatewayRow['status']) => {
+    if (status === 'connected') return 'bg-emerald-500';
+    if (status === 'local') return 'bg-primary';
+    return 'bg-slate-300 dark:bg-slate-600';
+  };
+
+  const labelClass = (status: GatewayRow['status']) => {
+    if (status === 'connected') return 'text-emerald-600 dark:text-emerald-400';
+    if (status === 'local') return 'text-primary';
+    return 'text-muted-foreground';
+  };
+
+  const statusLabel = (status: GatewayRow['status']) => {
+    if (status === 'connected') return 'Connected';
+    if (status === 'local') return 'Active';
+    return 'Not configured';
+  };
+
   return (
     <Card className="h-full flex flex-col">
       <CardHeader className="pb-3 border-b">
@@ -243,30 +293,16 @@ function GatewayHealth() {
         </CardTitle>
       </CardHeader>
       <CardContent className="pt-4 space-y-3 flex-1">
-        {GATEWAYS.map(({ name, latency, status }) => (
+        {rows.map(({ name, status, detail }) => (
           <div key={name} className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <div
-                aria-hidden
-                className={[
-                  'w-2 h-2 rounded-full shrink-0',
-                  status === 'operational'
-                    ? 'bg-emerald-500'
-                    : 'bg-amber-500 animate-pulse',
-                ].join(' ')}
-              />
+              <div aria-hidden className={`w-2 h-2 rounded-full shrink-0 ${dotClass(status)}`} />
               <span className="text-sm font-medium">{name}</span>
             </div>
             <div className="text-right">
-              <span className="text-xs text-muted-foreground block">{latency}</span>
-              <span
-                className={`text-xs font-medium block ${
-                  status === 'operational'
-                    ? 'text-emerald-600 dark:text-emerald-400'
-                    : 'text-amber-600 dark:text-amber-400'
-                }`}
-              >
-                {status === 'operational' ? 'Operational' : 'Degraded'}
+              <span className="text-xs text-muted-foreground block">{detail}</span>
+              <span className={`text-xs font-medium block ${labelClass(status)}`}>
+                {statusLabel(status)}
               </span>
             </div>
           </div>

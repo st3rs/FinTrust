@@ -1,350 +1,531 @@
-import React, { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import React, { useEffect, useRef, useState } from 'react';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { Invoice } from '../types';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
-import { CreditCard, Wallet, QrCode, CheckCircle2, Copy } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { CreditCard, Wallet, QrCode, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { supabase } from '../lib/supabase';
+import generatePayload from 'promptpay-qr';
+import QRCode from 'qrcode';
+import { loadScript } from '@paypal/paypal-js';
 
-export default function PaymentPage() {
-  const { id } = useParams();
-  const [invoice, setInvoice] = useState<Invoice | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [processing, setProcessing] = useState(false);
-  const [paymentSuccess, setPaymentSuccess] = useState(false);
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    let active = true;
+interface GatewayStatus {
+  stripe: { connected: boolean; mode: string | null };
+  paypal: { connected: boolean; environment: string | null };
+  promptpay: { connected: boolean };
+}
 
-    async function loadInvoice() {
-      try {
-        setLoading(true);
-        // 1. Try querying Supabase client-side
-        const { data, error } = await supabase
-          .from('invoices')
-          .select('*')
-          .eq('id', id)
-          .single();
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-        if (active && data && !error) {
-          const mappedInvoice: Invoice = {
-            id: data.id,
-            invoiceNumber: data.id,
-            amount: data.amount || 0,
-            currency: data.currency || 'USD',
-            status: data.status || 'UNPAID',
-            customerName: data.client || 'Client',
-            customerEmail: data.customerEmail || 'billing@client.com',
-            dueDate: data.dueDate || data.due_date || data.date || new Date().toISOString(),
-            createdAt: data.date || data.created_at || new Date().toISOString(),
-            items: data.items || [
-              { description: 'Services Rendered', quantity: 1, price: data.amount || 0 }
-            ]
-          };
-          setInvoice(mappedInvoice);
-          if (mappedInvoice.status === 'PAID') {
-            setPaymentSuccess(true);
-          }
-          setLoading(false);
-          return;
-        }
-      } catch (err) {
-        console.warn('Supabase fetch failed or table missing, trying API:', err);
-      }
-
-      // 2. Fallback to server API
-      if (!active) return;
-      fetch(`/api/invoices/${id}`)
-        .then(res => res.json())
-        .then(data => {
-          if (active) {
-            if (data.data) {
-              setInvoice(data.data);
-              if (data.data.status === 'PAID') {
-                setPaymentSuccess(true);
-              }
-            } else {
-              // Work with placeholder if mock DB doesn't have it either
-              const fallback: Invoice = {
-                id: id || 'INV-XXX',
-                invoiceNumber: id || 'INV-XXX',
-                amount: 1540.00,
-                currency: 'USD',
-                status: 'UNPAID',
-                customerName: 'Acme Corp',
-                customerEmail: 'billing@acme.com',
-                dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
-                createdAt: new Date().toISOString(),
-                items: [
-                  { description: 'Services Rendered', quantity: 1, price: 1540.00 }
-                ]
-              };
-              setInvoice(fallback);
-            }
-            setLoading(false);
-          }
-        })
-        .catch(() => {
-          if (active) {
-            // Static demo fallback
-            const fallback: Invoice = {
-              id: id || 'INV-XXX',
-              invoiceNumber: id || 'INV-XXX',
-              amount: 1540.00,
-              currency: 'USD',
-              status: 'UNPAID',
-              customerName: 'Acme Corp',
-              customerEmail: 'billing@acme.com',
-              dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
-              createdAt: new Date().toISOString(),
-              items: [
-                { description: 'Services Rendered', quantity: 1, price: 1540.00 }
-              ]
-            };
-            setInvoice(fallback);
-            setLoading(false);
-          }
-        });
+async function fetchInvoice(id: string): Promise<Invoice | null> {
+  // Try Supabase client first (fastest)
+  try {
+    const { data } = await supabase.from('invoices').select('*').eq('id', id).single();
+    if (data) {
+      return {
+        id: data.id,
+        invoiceNumber: data.metadata?.invoiceNumber ?? data.id,
+        amount: data.amount ?? 0,
+        currency: data.metadata?.currency ?? 'USD',
+        status: data.status ?? 'UNPAID',
+        customerName: data.client ?? 'Client',
+        customerEmail: data.metadata?.customerEmail ?? '',
+        dueDate: data.due_date ?? data.date ?? new Date().toISOString(),
+        createdAt: data.created_at ?? data.date ?? new Date().toISOString(),
+        items: data.metadata?.items ?? [{ description: 'Services Rendered', quantity: 1, price: data.amount ?? 0 }],
+      };
     }
+  } catch { /* fall through */ }
 
-    loadInvoice();
+  // Fallback to API
+  try {
+    const r = await fetch(`/api/invoices/${id}`);
+    const d = await r.json();
+    if (d.data) return d.data;
+  } catch { /* fall through */ }
 
-    return () => {
-      active = false;
-    };
-  }, [id]);
+  return null;
+}
 
-  const handlePay = (gateway: string) => {
-    setProcessing(true);
-    setTimeout(async () => {
-      // 1. Try to update status in Supabase first
-      let supabaseSuccess = false;
-      try {
-        const { error } = await supabase
-          .from('invoices')
-          .update({ status: 'PAID' })
-          .eq('id', id);
-        
-        if (!error) {
-          supabaseSuccess = true;
-        }
-      } catch (err) {
-        console.warn('Supabase update failed:', err);
-      }
+// ─── Stripe checkout tab ─────────────────────────────────────────────────────
 
-      if (supabaseSuccess) {
-        setProcessing(false);
-        setPaymentSuccess(true);
-        if (invoice) {
-          setInvoice({ ...invoice, status: 'PAID' });
-        }
-        return;
-      }
+function StripeTab({
+  invoice,
+  stripeConnected,
+}: {
+  invoice: Invoice;
+  stripeConnected: boolean;
+}) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-      // 2. Fallback to continuous Express server API
-      fetch(`/api/payments/${id}/process`, {
+  const handleStripeCheckout = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/public/stripe/create-checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gateway })
-      })
-      .then(res => res.json())
-      .then(() => {
-        setProcessing(false);
-        setPaymentSuccess(true);
-        if (invoice) {
-          setInvoice({ ...invoice, status: 'PAID' });
-        }
-      })
-      .catch(() => {
-        // Safe UI success simulation even if entirely offline/serverless
-        setProcessing(false);
-        setPaymentSuccess(true);
-        if (invoice) {
-          setInvoice({ ...invoice, status: 'PAID' });
-        }
+        body: JSON.stringify({ invoiceId: invoice.id }),
       });
-    }, 1500); // simulate delay
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Failed to start checkout');
+      window.location.href = data.url;
+    } catch (err: any) {
+      setError(err.message);
+      setLoading(false);
+    }
   };
 
-  if (loading) {
-    return <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-zinc-950">Loading...</div>;
-  }
-
-  if (!invoice) {
-    return <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-zinc-950">Invoice not found.</div>;
+  if (!stripeConnected) {
+    return (
+      <div className="flex flex-col items-center justify-center py-8 text-center gap-3">
+        <AlertCircle className="w-8 h-8 text-muted-foreground" />
+        <p className="text-sm text-muted-foreground">
+          Stripe is not configured. The merchant needs to add their Stripe API keys.
+        </p>
+      </div>
+    );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50/50 dark:bg-zinc-950 flex flex-col items-center py-12 px-4 sm:px-6 lg:px-8 font-sans">
+    <div className="space-y-5">
+      <div className="bg-muted/40 rounded-lg p-4 text-sm text-muted-foreground">
+        You will be redirected to Stripe's secure checkout to complete your payment with a credit or debit card.
+      </div>
+      {error && (
+        <div className="bg-red-50 text-red-700 border border-red-200 text-sm p-3 rounded-lg flex items-start gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+          {error}
+        </div>
+      )}
+      <Button
+        className="w-full"
+        size="lg"
+        disabled={loading}
+        onClick={handleStripeCheckout}
+      >
+        {loading ? (
+          <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Redirecting to Stripe…</>
+        ) : (
+          <><CreditCard className="w-4 h-4 mr-2" /> Pay {invoice.amount.toLocaleString()} {invoice.currency} with Card</>
+        )}
+      </Button>
+      <p className="text-xs text-center text-muted-foreground">
+        🔒 Secured by Stripe — PCI DSS compliant
+      </p>
+    </div>
+  );
+}
+
+// ─── PayPal tab ───────────────────────────────────────────────────────────────
+
+function PayPalTab({
+  invoice,
+  paypalConnected,
+  onSuccess,
+}: {
+  invoice: Invoice;
+  paypalConnected: boolean;
+  onSuccess: () => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const clientId = import.meta.env.VITE_PAYPAL_CLIENT_ID;
+
+  useEffect(() => {
+    if (!paypalConnected || !clientId) {
+      setLoading(false);
+      return;
+    }
+    if (!containerRef.current) return;
+
+    let cancelled = false;
+
+    loadScript({
+      clientId,
+      currency: (invoice.currency ?? 'USD').toUpperCase(),
+      intent: 'capture',
+    })
+      .then((paypal) => {
+        if (cancelled || !paypal || !containerRef.current) return;
+        setLoading(false);
+
+        paypal.Buttons!({
+          style: { layout: 'vertical', color: 'blue', shape: 'rect', label: 'pay' },
+          createOrder: async () => {
+            const res = await fetch('/api/public/paypal/create-order', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ invoiceId: invoice.id }),
+            });
+            const d = await res.json();
+            if (!res.ok) throw new Error(d.error ?? 'Failed to create order');
+            return d.orderId;
+          },
+          onApprove: async (data: { orderID: string }) => {
+            const res = await fetch(`/api/public/paypal/capture-order/${data.orderID}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+            });
+            const d = await res.json();
+            if (!res.ok || d.status !== 'COMPLETED') {
+              setError('Payment capture failed. Please try again.');
+              return;
+            }
+            onSuccess();
+          },
+          onError: (err: any) => {
+            console.error('[PayPal]', err);
+            setError('PayPal encountered an error. Please try a different payment method.');
+          },
+          onCancel: () => {
+            setError(null); // Clear errors if user just cancelled
+          },
+        }).render(containerRef.current!);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError('Failed to load PayPal. Please refresh and try again.');
+          setLoading(false);
+          console.error('[PayPal loadScript]', err);
+        }
+      });
+
+    return () => { cancelled = true; };
+  }, [invoice.id, invoice.currency, clientId, paypalConnected, onSuccess]);
+
+  if (!paypalConnected || !clientId) {
+    return (
+      <div className="flex flex-col items-center justify-center py-8 text-center gap-3">
+        <AlertCircle className="w-8 h-8 text-muted-foreground" />
+        <p className="text-sm text-muted-foreground">
+          PayPal is not configured. The merchant needs to add their PayPal credentials.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {error && (
+        <div className="bg-red-50 text-red-700 border border-red-200 text-sm p-3 rounded-lg flex items-start gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+          {error}
+        </div>
+      )}
+      {loading && (
+        <div className="flex items-center justify-center py-8 gap-2 text-muted-foreground text-sm">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading PayPal…
+        </div>
+      )}
+      <div ref={containerRef} id="paypal-button-container" className={loading ? 'hidden' : ''} />
+    </div>
+  );
+}
+
+// ─── PromptPay tab ────────────────────────────────────────────────────────────
+
+function PromptPayTab({
+  invoice,
+  onSuccess,
+}: {
+  invoice: Invoice;
+  onSuccess: () => void;
+}) {
+  const [qrSrc, setQrSrc] = useState<string | null>(null);
+  const [processing, setProcessing] = useState(false);
+
+  // Load operator's PromptPay ID from their profile
+  const promptPayId =
+    typeof window !== 'undefined'
+      ? localStorage.getItem('defaultPromptPayId') ?? ''
+      : '';
+
+  useEffect(() => {
+    if (!promptPayId) return;
+    const payload = generatePayload(promptPayId, {
+      amount: invoice.amount > 0 ? invoice.amount : undefined,
+    });
+    QRCode.toDataURL(payload, {
+      width: 200,
+      margin: 2,
+      color: { dark: '#0f172a', light: '#ffffff' },
+    })
+      .then(setQrSrc)
+      .catch(console.error);
+  }, [promptPayId, invoice.amount]);
+
+  const handleConfirm = async () => {
+    setProcessing(true);
+    try {
+      await supabase.from('invoices').update({ status: 'PAID' }).eq('id', invoice.id);
+    } catch { /* offline fallback */ }
+    onSuccess();
+  };
+
+  return (
+    <div className="space-y-5 flex flex-col items-center text-center">
+      <div>
+        <h4 className="font-medium text-sm">Scan with Thai Banking App</h4>
+        <p className="text-xs text-muted-foreground mt-1">KBank, SCB, BBL, Krungsri, etc.</p>
+      </div>
+      <div className="bg-white p-3 rounded-xl shadow-sm border border-[#113566]/20">
+        <div className="w-[196px] h-[196px] bg-[#113566]/5 flex items-center justify-center rounded-lg">
+          {qrSrc ? (
+            <img src={qrSrc} alt="PromptPay QR" className="w-full h-full object-contain rounded" />
+          ) : (
+            <div className="flex flex-col items-center gap-2 text-muted-foreground">
+              <QrCode className="w-10 h-10 opacity-30" />
+              <span className="text-xs">{promptPayId ? 'Generating QR…' : 'PromptPay ID not set'}</span>
+            </div>
+          )}
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Amount: <span className="font-semibold text-foreground">
+          ฿{invoice.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+        </span>
+      </p>
+      <Button
+        className="w-full"
+        variant="outline"
+        size="lg"
+        disabled={processing}
+        onClick={handleConfirm}
+      >
+        {processing ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Confirming…</> : 'I have completed the transfer'}
+      </Button>
+    </div>
+  );
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
+
+export default function PaymentPage() {
+  const reduced = useReducedMotion();
+  const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+
+  const [invoice, setInvoice] = useState<Invoice | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [paymentSuccess, setPaymentSuccess] = useState(false);
+  const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus | null>(null);
+
+  // ── Load invoice ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!id) return;
+    let active = true;
+    setLoading(true);
+
+    fetchInvoice(id).then((inv) => {
+      if (!active) return;
+      setInvoice(inv);
+      if (inv?.status === 'PAID') setPaymentSuccess(true);
+      setLoading(false);
+    });
+
+    return () => { active = false; };
+  }, [id]);
+
+  // ── Handle Stripe redirect-back ─────────────────────────────────────────────
+  // After Stripe checkout, the URL has ?stripe=success. Poll until DB reflects PAID.
+  useEffect(() => {
+    if (searchParams.get('stripe') !== 'success' || !id) return;
+
+    let attempts = 0;
+    const poll = setInterval(async () => {
+      attempts++;
+      const inv = await fetchInvoice(id);
+      if (inv?.status === 'PAID') {
+        setInvoice(inv);
+        setPaymentSuccess(true);
+        clearInterval(poll);
+      }
+      if (attempts >= 10) clearInterval(poll); // Stop after ~10s
+    }, 1000);
+
+    return () => clearInterval(poll);
+  }, [searchParams, id]);
+
+  // ── Fetch gateway status ────────────────────────────────────────────────────
+  useEffect(() => {
+    fetch('/api/gateways/status')
+      .then((r) => r.json())
+      .then(setGatewayStatus)
+      .catch(() => {});
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!invoice) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-muted-foreground">
+        Invoice not found.
+      </div>
+    );
+  }
+
+  const handleSuccess = () => {
+    setInvoice({ ...invoice, status: 'PAID' });
+    setPaymentSuccess(true);
+  };
+
+  return (
+    <div className="min-h-screen bg-muted/30 flex flex-col items-center py-12 px-4 sm:px-6 lg:px-8 font-sans">
       <div className="w-full max-w-3xl flex flex-col lg:flex-row gap-8">
-        
-        {/* Left Side: Invoice Summary */}
+
+        {/* Left — Invoice summary */}
         <div className="w-full lg:w-1/2 flex flex-col space-y-6">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-gray-100 placeholder:">BK Invoice Gateway</h1>
-            <p className="text-sm text-gray-500 mt-1">Payment to the merchant</p>
-          </div>
-          
-          <div className="flex flex-col">
-            <span className="text-sm text-gray-500 mb-1">Amount due</span>
-            <span className="text-5xl font-extrabold tracking-tighter">
-              {invoice.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })} <span className="text-2xl text-gray-400">{invoice.currency}</span>
-            </span>
+            <h1 className="text-2xl font-bold tracking-tight">FinTrust Payment</h1>
+            <p className="text-sm text-muted-foreground mt-1">Invoice from merchant</p>
           </div>
 
-          <Card className="border-none shadow-none bg-transparent">
-            <CardHeader className="px-0 pt-0 pb-4">
-              <CardTitle className="text-base text-gray-700 dark:text-gray-300">Invoice Details</CardTitle>
-            </CardHeader>
-            <CardContent className="px-0 space-y-4">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-500">Invoice number</span>
-                <span className="font-medium font-mono">{invoice.invoiceNumber}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-500">Billed to</span>
-                <span className="font-medium text-right">{invoice.customerName}<br/><span className="text-gray-400">{invoice.customerEmail}</span></span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-500">Date due</span>
-                <span className="font-medium">{new Date(invoice.dueDate).toLocaleDateString()}</span>
-              </div>
-            </CardContent>
-          </Card>
+          <div>
+            <span className="text-sm text-muted-foreground">Amount due</span>
+            <div className="text-5xl font-extrabold tracking-tighter mt-1">
+              {invoice.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              <span className="text-2xl text-muted-foreground ml-2">{invoice.currency}</span>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <p className="text-sm font-medium text-muted-foreground">Invoice details</p>
+            <div className="space-y-2 text-sm">
+              {[
+                ['Invoice', invoice.invoiceNumber],
+                ['Billed to', invoice.customerName],
+                ['Email', invoice.customerEmail],
+                ['Due', new Date(invoice.dueDate).toLocaleDateString()],
+              ].map(([label, value]) => (
+                <div key={label} className="flex justify-between">
+                  <span className="text-muted-foreground">{label}</span>
+                  <span className="font-medium text-right max-w-[180px] truncate">{value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
 
           <Separator />
-          
+
           <div className="space-y-2">
-            <h3 className="text-sm font-medium mb-3">Line items</h3>
+            <p className="text-sm font-medium text-muted-foreground mb-3">Line items</p>
             {invoice.items.map((item, idx) => (
-              <div key={idx} className="flex justify-between text-sm text-gray-600 dark:text-gray-400">
-                <span>{item.quantity} x {item.description}</span>
+              <div key={idx} className="flex justify-between text-sm">
+                <span className="text-muted-foreground">{item.quantity} × {item.description}</span>
                 <span>{(item.quantity * item.price).toLocaleString()}</span>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Right Side: Payment Form */}
+        {/* Right — Payment form */}
         <div className="w-full lg:w-1/2">
           <AnimatePresence mode="wait">
             {paymentSuccess ? (
               <motion.div
                 key="success"
-                initial={{ opacity: 0, scale: 0.95 }}
+                initial={{ opacity: 0, scale: reduced ? 1 : 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
-                className="h-full flex items-center justify-center"
+                transition={{ duration: reduced ? 0.15 : 0.3 }}
               >
-                <Card className="w-full text-center border-green-100 dark:border-green-900 bg-green-50/50 dark:bg-green-900/10 shadow-sm">
+                <Card className="text-center border-emerald-100 dark:border-emerald-900 bg-emerald-50/50 dark:bg-emerald-900/10">
                   <CardContent className="pt-10 pb-8 flex flex-col items-center">
-                    <div className="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mb-6">
-                      <CheckCircle2 className="w-8 h-8 text-green-600 dark:text-green-400" />
+                    <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-900/30 rounded-full flex items-center justify-center mb-6">
+                      <CheckCircle2 className="w-8 h-8 text-emerald-600 dark:text-emerald-400" />
                     </div>
-                    <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2">Payment Successful</h2>
-                    <p className="text-gray-500 mb-6">A receipt has been sent to {invoice.customerEmail}</p>
-                    <Button variant="outline" className="w-full" onClick={() => window.print()}>Download Receipt</Button>
+                    <h2 className="text-2xl font-bold mb-2">Payment Successful</h2>
+                    <p className="text-muted-foreground mb-6 text-sm">
+                      {invoice.customerEmail ? `A receipt will be sent to ${invoice.customerEmail}` : 'Thank you for your payment.'}
+                    </p>
+                    <Button variant="outline" className="w-full" onClick={() => window.print()}>
+                      Download Receipt
+                    </Button>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            ) : searchParams.get('stripe') === 'success' ? (
+              // Stripe returned success but webhook not yet fired — show polling state
+              <motion.div
+                key="stripe-processing"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+              >
+                <Card>
+                  <CardContent className="pt-10 pb-8 flex flex-col items-center text-center">
+                    <Loader2 className="w-8 h-8 animate-spin text-primary mb-4" />
+                    <h2 className="text-lg font-semibold mb-2">Confirming payment…</h2>
+                    <p className="text-sm text-muted-foreground">
+                      Your payment was received. Waiting for confirmation from Stripe.
+                    </p>
                   </CardContent>
                 </Card>
               </motion.div>
             ) : (
               <motion.div
                 key="payment"
-                initial={{ opacity: 0, x: 20 }}
+                initial={{ opacity: 0, x: reduced ? 0 : 20 }}
                 animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: reduced ? 0.15 : 0.3 }}
               >
-                <Card className="shadow-lg border-gray-200/50 dark:border-gray-800">
+                <Card className="shadow-lg">
                   <CardHeader>
                     <CardTitle>Select Payment Method</CardTitle>
-                    <CardDescription>Secure, encrypted payment powered by multi-gateway architecture.</CardDescription>
+                    <CardDescription>Secure, encrypted payment.</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <Tabs defaultValue="card" className="w-full">
-                      <TabsList className="flex flex-col sm:grid sm:w-full sm:grid-cols-3 mb-6 h-auto bg-slate-100 dark:bg-slate-800 p-1 rounded-lg gap-1">
-                        <TabsTrigger value="card" className="flex items-center justify-center gap-2 w-full"><CreditCard className="w-4 h-4"/> Card</TabsTrigger>
-                        <TabsTrigger value="crypto" className="flex items-center justify-center gap-2 w-full"><Wallet className="w-4 h-4"/> Crypto</TabsTrigger>
-                        <TabsTrigger value="promptpay" className="flex items-center justify-center gap-2 w-full"><QrCode className="w-4 h-4"/> PromptPay</TabsTrigger>
+                      <TabsList className="grid w-full grid-cols-3 mb-6">
+                        <TabsTrigger value="card" className="gap-1.5">
+                          <CreditCard className="w-3.5 h-3.5" /> Card
+                        </TabsTrigger>
+                        <TabsTrigger value="paypal" className="gap-1.5">
+                          <Wallet className="w-3.5 h-3.5" /> PayPal
+                        </TabsTrigger>
+                        <TabsTrigger value="promptpay" className="gap-1.5">
+                          <QrCode className="w-3.5 h-3.5" /> PromptPay
+                        </TabsTrigger>
                       </TabsList>
-                      
-                      <TabsContent value="card" className="space-y-4">
-                        <div className="space-y-2">
-                          <Label>Card Information</Label>
-                          <div className="relative">
-                            <Input placeholder="1234 5678 1234 5678" className="pl-10 font-mono w-full" />
-                            <CreditCard className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <Label>Expiry</Label>
-                            <Input placeholder="MM/YY" className="font-mono w-full" />
-                          </div>
-                          <div className="space-y-2">
-                            <Label>CVC</Label>
-                            <Input placeholder="123" className="font-mono w-full" type="password" />
-                          </div>
-                        </div>
-                        <div className="space-y-2 pt-2">
-                          <Label>Cardholder Name</Label>
-                          <Input placeholder="John Doe" className="w-full" />
-                        </div>
-                        <Button className="w-full mt-4" size="lg" disabled={processing} onClick={() => handlePay('stripe')}>
-                          {processing ? 'Processing...' : `Pay ${invoice.amount.toLocaleString()} ${invoice.currency}`}
-                        </Button>
+
+                      <TabsContent value="card">
+                        <StripeTab
+                          invoice={invoice}
+                          stripeConnected={gatewayStatus?.stripe.connected ?? false}
+                        />
                       </TabsContent>
 
-                      <TabsContent value="crypto" className="space-y-6 flex flex-col items-center text-center">
-                        <div>
-                          <h4 className="font-medium text-sm text-gray-900 dark:text-gray-100">Send USDT (TRC-20)</h4>
-                          <p className="text-xs text-muted-foreground mt-1">Send exact amount to avoid delays</p>
-                        </div>
-                        
-                        <div className="bg-white p-4 rounded-xl shadow-sm border">
-                          {/* Placeholder QR */}
-                          <div className="w-48 h-48 bg-gray-100 flex items-center justify-center rounded-lg border-2 border-dashed border-gray-300">
-                             <QrCode className="text-gray-400 w-12 h-12" />
-                          </div>
-                        </div>
-                        
-                        <div className="w-full space-y-2">
-                          <Label className="text-left block text-xs">Wallet Address</Label>
-                          <div className="flex gap-2">
-                            <Input readOnly value="TY8z..." className="font-mono bg-muted text-center" />
-                            <Button variant="outline" size="icon"><Copy className="w-4 h-4" /></Button>
-                          </div>
-                        </div>
-                        
-                         <Button className="w-full mt-2" size="lg" variant="secondary" disabled={processing} onClick={() => handlePay('crypto')}>
-                          {processing ? 'Verifying...' : `I have sent the payment`}
-                        </Button>
+                      <TabsContent value="paypal">
+                        <PayPalTab
+                          invoice={invoice}
+                          paypalConnected={gatewayStatus?.paypal.connected ?? false}
+                          onSuccess={handleSuccess}
+                        />
                       </TabsContent>
 
-                      <TabsContent value="promptpay" className="space-y-6 flex flex-col items-center text-center">
-                        <div>
-                          <h4 className="font-medium text-sm text-gray-900 dark:text-gray-100">Scan with Thai Banking App</h4>
-                           <p className="text-xs text-muted-foreground mt-1">Supported by KBank, SCB, BBL, Krungsri, etc.</p>
-                        </div>
-                         <div className="bg-white p-4 rounded-xl shadow-sm border border-[#113566]">
-                           {/* Placeholder PromptPay QR */}
-                           <div className="w-48 h-48 bg-[#113566]/5 relative flex items-center justify-center rounded-lg border border-[#113566]/20">
-                             <img src="https://upload.wikimedia.org/wikipedia/commons/e/e4/PromptPay-logo.png" className="absolute top-2 w-20 opacity-30" alt="PromptPay" />
-                             <QrCode className="text-[#113566] w-24 h-24" />
-                           </div>
-                         </div>
-                         <Button className="w-full mt-2" size="lg" variant="outline" disabled={processing} onClick={() => handlePay('promptpay')}>
-                           {processing ? 'Confirming...' : `Simulate QR Scan`}
-                         </Button>
+                      <TabsContent value="promptpay">
+                        <PromptPayTab
+                          invoice={invoice}
+                          onSuccess={handleSuccess}
+                        />
                       </TabsContent>
-
                     </Tabs>
                   </CardContent>
-                  <CardFooter className="flex flex-col items-center justify-center text-xs text-muted-foreground border-t pt-4">
-                    <p className="flex items-center gap-1">🔒 Secured by BK Gateway Infrastructure</p>
+                  <CardFooter className="justify-center text-xs text-muted-foreground border-t pt-4">
+                    🔒 Payments secured by Stripe & PayPal infrastructure
                   </CardFooter>
                 </Card>
               </motion.div>
