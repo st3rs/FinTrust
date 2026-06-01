@@ -350,6 +350,19 @@ async function startServer() {
 
   app.use(express.json());
 
+  // ── Payment status polling — public, lightweight, no auth ───────────────
+  // Customers poll this every few seconds while looking at the QR code.
+  // Returns only { status } to avoid leaking invoice details publicly.
+  app.get("/api/public/payment-status/:invoiceId", async (req, res) => {
+    const { data } = await supabaseAdmin
+      .from("invoices")
+      .select("status")
+      .eq("id", req.params.invoiceId)
+      .maybeSingle();
+
+    res.json({ status: data?.status ?? "NOT_FOUND" });
+  });
+
   // ── Gateway status — public, no auth ────────────────────────────────────
   app.get("/api/gateways/status", (_req, res) => {
     const stripeOk = Boolean(process.env.STRIPE_SECRET_KEY);

@@ -241,14 +241,15 @@ function PromptPayTab({
   onSuccess: () => void;
 }) {
   const [qrSrc, setQrSrc] = useState<string | null>(null);
-  const [processing, setProcessing] = useState(false);
+  const [polling, setPolling] = useState(false);
+  const [pollCount, setPollCount] = useState(0);
 
-  // Load operator's PromptPay ID from their profile
   const promptPayId =
     typeof window !== 'undefined'
       ? localStorage.getItem('defaultPromptPayId') ?? ''
       : '';
 
+  // Generate QR when ID or amount changes
   useEffect(() => {
     if (!promptPayId) return;
     const payload = generatePayload(promptPayId, {
@@ -263,13 +264,37 @@ function PromptPayTab({
       .catch(console.error);
   }, [promptPayId, invoice.amount]);
 
-  const handleConfirm = async () => {
-    setProcessing(true);
-    try {
-      await supabase.from('invoices').update({ status: 'PAID' }).eq('id', invoice.id);
-    } catch { /* offline fallback */ }
-    onSuccess();
-  };
+  // Auto-poll payment status every 3s once QR is visible.
+  // Stops when PAID is detected, after 5 min (100 attempts), or on unmount.
+  useEffect(() => {
+    if (!qrSrc || invoice.status === 'PAID') return;
+
+    setPolling(true);
+    const interval = setInterval(async () => {
+      setPollCount((n) => n + 1);
+      try {
+        const res = await fetch(`/api/public/payment-status/${invoice.id}`);
+        const { status } = await res.json();
+        if (status === 'PAID') {
+          clearInterval(interval);
+          setPolling(false);
+          onSuccess();
+        }
+      } catch { /* network hiccup — keep polling */ }
+    }, 3_000);
+
+    // Stop after 100 attempts (~5 min) to avoid polling forever
+    const timeout = setTimeout(() => {
+      clearInterval(interval);
+      setPolling(false);
+    }, 300_000);
+
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+      setPolling(false);
+    };
+  }, [qrSrc, invoice.id, invoice.status, onSuccess]);
 
   return (
     <div className="space-y-5 flex flex-col items-center text-center">
@@ -277,7 +302,8 @@ function PromptPayTab({
         <h4 className="font-medium text-sm">Scan with Thai Banking App</h4>
         <p className="text-xs text-muted-foreground mt-1">KBank, SCB, BBL, Krungsri, etc.</p>
       </div>
-      <div className="bg-white p-3 rounded-xl shadow-sm border border-[#113566]/20">
+
+      <div className="bg-white p-3 rounded-xl shadow-sm border border-[#113566]/20 relative">
         <div className="w-[196px] h-[196px] bg-[#113566]/5 flex items-center justify-center rounded-lg">
           {qrSrc ? (
             <img src={qrSrc} alt="PromptPay QR" className="w-full h-full object-contain rounded" />
@@ -288,20 +314,36 @@ function PromptPayTab({
             </div>
           )}
         </div>
+        {/* Live polling indicator */}
+        {polling && (
+          <div className="absolute -top-2 -right-2 flex items-center gap-1 bg-white border rounded-full px-2 py-0.5 shadow-sm text-[10px] font-medium text-emerald-600">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            Waiting for payment
+          </div>
+        )}
       </div>
+
       <p className="text-xs text-muted-foreground">
-        Amount: <span className="font-semibold text-foreground">
+        Amount:{' '}
+        <span className="font-semibold text-foreground">
           ฿{invoice.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
         </span>
       </p>
+
+      <p className="text-[11px] text-muted-foreground">
+        {polling
+          ? 'Page will update automatically once payment is detected.'
+          : 'Scan the QR above, then confirm below.'}
+      </p>
+
+      {/* Manual fallback — in case webhook fires but polling misses it */}
       <Button
         className="w-full"
-        variant="outline"
-        size="lg"
-        disabled={processing}
-        onClick={handleConfirm}
+        variant="ghost"
+        size="sm"
+        onClick={onSuccess}
       >
-        {processing ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Confirming…</> : 'I have completed the transfer'}
+        I've already paid — confirm manually
       </Button>
     </div>
   );

@@ -221,4 +221,4 @@ SEED_DB=true npm run dev   # Inserts sample invoices on first boot
 - [x] `total_billed` on customers is auto-updated via `syncCustomerTotalBilled()` after every confirmed payment
 - [x] Pagination on all list endpoints (`?limit=&offset=`); `usePagination` hook + `PaginationControls` component; Invoices/Transactions/Clients wired up
 - [x] Rate limiting added: public routes 30/min, auth routes 20/15min, API routes 120/min
-- [ ] QR payment status polling not implemented — needs SCB/KBank callback webhook
+- [x] QR payment status polling — auto-poll /api/public/payment-status/:id every 3s; stops on PAID or after 5 min; manual fallback remains
