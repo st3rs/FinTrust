@@ -273,3 +273,28 @@ create policy "qr_payments_delete" on qr_payments
 
 create index if not exists idx_qr_payments_user_status
   on qr_payments(user_id, status);
+
+-- ─── gateway_configs ───────────────────────────────────────────────────────
+-- Stores per-operator payment gateway credentials (server-side only).
+-- No user-facing RLS — accessed exclusively via service_role key.
+-- NEVER expose this table via the anon/authenticated Supabase client.
+
+create table if not exists gateway_configs (
+  id            uuid        primary key default gen_random_uuid(),
+  user_id       uuid        not null references auth.users(id) on delete cascade,
+  gateway       text        not null check (gateway in ('stripe', 'paypal')),
+  publishable_key text,
+  secret_key    text,       -- store here; access only via service_role
+  environment   text        not null default 'live'
+                              check (environment in ('live', 'test', 'sandbox')),
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  unique (user_id, gateway)
+);
+
+-- No RLS — service_role bypasses RLS by default.
+-- Intentionally no user-facing policies; this table is server-only.
+alter table gateway_configs enable row level security;
+
+create index if not exists idx_gateway_configs_user
+  on gateway_configs(user_id, gateway);

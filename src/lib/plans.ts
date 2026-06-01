@@ -1,6 +1,10 @@
 // ─── Freemium plan definitions ───────────────────────────────────────────────
-// Free: PromptPay forever + 5 invoices/month — enough for a micro-business
-// Pro:  All gateways + unlimited invoices — needed for card/international payments
+//
+// Free:  PromptPay 10 QR/month  |  5 invoices/month  |  Stripe (own keys)
+// Pro:   PromptPay unlimited    |  unlimited invoices |  all gateways
+//
+// Stripe is NOT locked behind Pro — operators connect their own Stripe keys.
+// The per-month limit on Free is the primary upgrade driver.
 
 export const PLANS = {
   free: {
@@ -9,15 +13,15 @@ export const PLANS = {
     price: 0,
     currency: 'THB',
     invoicesPerMonth: 5,
-    gateways: ['promptpay'] as string[],
+    promptpayPerMonth: 10,
+    gateways: ['promptpay', 'stripe'] as string[], // Stripe OK if user has own keys
     features: {
-      stripe: false,
       paypal: false,
       crypto: false,
       webhooks: false,
       apiAccess: false,
       analytics: false,
-      paymentLinks: 1,       // max active payment links
+      paymentLinks: 1,
     },
     badge: { label: 'Free', class: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300' },
   },
@@ -27,9 +31,9 @@ export const PLANS = {
     price: 499,
     currency: 'THB',
     invoicesPerMonth: Infinity,
+    promptpayPerMonth: Infinity,
     gateways: ['promptpay', 'stripe', 'paypal', 'crypto'] as string[],
     features: {
-      stripe: true,
       paypal: true,
       crypto: true,
       webhooks: true,
@@ -46,8 +50,4 @@ export type Plan = typeof PLANS[PlanId];
 
 export function getPlan(planId: string | undefined | null): Plan {
   return PLANS[(planId as PlanId) ?? 'free'] ?? PLANS.free;
-}
-
-export function canUseGateway(planId: string | undefined | null, gateway: string): boolean {
-  return getPlan(planId).gateways.includes(gateway);
 }

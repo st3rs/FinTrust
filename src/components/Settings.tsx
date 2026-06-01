@@ -91,6 +91,10 @@ export default function Settings() {
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus | null>(null);
   const [usage, setUsage] = useState<{ invoicesThisMonth: number; invoiceLimit: number | null; canCreateInvoice: boolean } | null>(null);
   const [upgradeLoading, setUpgradeLoading] = useState(false);
+  const [stripeStatus, setStripeStatus] = useState<{ connected: boolean; publishableKey: string | null; environment: string | null } | null>(null);
+  const [stripeForm, setStripeForm] = useState({ publishableKey: '', secretKey: '', environment: 'live' });
+  const [stripeConnecting, setStripeConnecting] = useState(false);
+  const [stripeError, setStripeError] = useState('');
   const [searchParams] = useSearchParams();
   const { language: lang, setLanguage: changeLanguage } = useLanguage();
   const { plan: currentPlan, planId, session } = useAuth();
@@ -108,6 +112,38 @@ export default function Settings() {
   useEffect(() => {
     fetch('/api/gateways/status').then(r => r.json()).then(setGatewayStatus).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!session?.access_token) return;
+    fetch('/api/gateways/stripe/status', { headers: { Authorization: `Bearer ${session.access_token}` } })
+      .then(r => r.json()).then(setStripeStatus).catch(() => {});
+  }, [session]);
+
+  const handleStripeConnect = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!session?.access_token) return;
+    setStripeConnecting(true);
+    setStripeError('');
+    try {
+      const res = await fetch('/api/gateways/stripe/connect', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(stripeForm),
+      });
+      const data = await res.json();
+      if (!res.ok) { setStripeError(data.error ?? 'Connection failed'); return; }
+      setStripeStatus({ connected: true, publishableKey: stripeForm.publishableKey, environment: stripeForm.environment });
+      setStripeForm({ publishableKey: '', secretKey: '', environment: 'live' });
+    } finally {
+      setStripeConnecting(false);
+    }
+  };
+
+  const handleStripeDisconnect = async () => {
+    if (!session?.access_token) return;
+    await fetch('/api/gateways/stripe/disconnect', { method: 'DELETE', headers: { Authorization: `Bearer ${session.access_token}` } });
+    setStripeStatus({ connected: false, publishableKey: null, environment: null });
+  };
 
   useEffect(() => {
     if (!session?.access_token) return;
@@ -378,9 +414,19 @@ export default function Settings() {
                 </div>
               )}
             </div>
+            <div>
+              <div className="flex justify-between text-sm mb-1">
+                <span className="text-slate-600">PromptPay QR</span>
+                <span className="font-semibold tabular-nums">
+                  —{' / '}{planId === 'pro' ? '∞' : '10'}
+                </span>
+              </div>
+            </div>
             <div className="flex justify-between text-sm">
-              <span className="text-slate-600">Payment gateways</span>
-              <span className="font-semibold">{currentPlan.gateways.length} active</span>
+              <span className="text-slate-600">Stripe</span>
+              <span className={`font-semibold text-xs ${stripeStatus?.connected ? 'text-emerald-600' : 'text-slate-400'}`}>
+                {stripeStatus?.connected ? 'Connected' : 'Not connected'}
+              </span>
             </div>
           </div>
 
@@ -428,76 +474,100 @@ export default function Settings() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Stripe Card */}
-        {(() => {
-          const stripe = gatewayStatus?.stripe;
-          const connected = stripe?.connected ?? false;
-          const mode = stripe?.mode;
-          return (
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm shadow-slate-200/50 p-6 flex flex-col">
-              <div className="flex justify-between items-start mb-6">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded bg-primary/10 text-primary flex items-center justify-center font-bold text-xl">
-                    S
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-lg leading-tight">Stripe</h3>
-                    <p className="text-sm text-slate-500 leading-tight">{t.stripeDesc}</p>
-                  </div>
-                </div>
-                {connected ? (
-                  <div className="bg-emerald-50 text-emerald-700 text-xs font-medium px-2 py-1 rounded-full flex items-center gap-1.5">
-                    <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
-                    {t.connected}
-                  </div>
-                ) : (
-                  <div className="bg-slate-100 text-slate-500 text-xs font-medium px-2 py-1 rounded-full flex items-center gap-1.5">
-                    <div className="w-1.5 h-1.5 bg-slate-400 rounded-full" />
-                    {t.notConnected}
-                  </div>
-                )}
-              </div>
-
-              {connected ? (
-                <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-6 space-y-2">
-                  <div className="flex items-center gap-1.5 text-emerald-600 text-xs font-medium">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12" /></svg>
-                    {t.apiKeyVerify}
-                  </div>
-                  {mode && (
-                    <p className="text-xs text-slate-500">
-                      Mode: <span className={`font-semibold ${mode === 'live' ? 'text-emerald-600' : 'text-amber-600'}`}>
-                        {mode === 'live' ? 'Live' : 'Test'}
-                      </span>
-                      {mode === 'test' && ' — switch to live keys when ready to go live'}
-                    </p>
-                  )}
-                </div>
-              ) : (
-                <div className="border border-dashed border-slate-300 rounded-lg p-4 mb-6 bg-slate-50/50 space-y-2">
-                  <p className="text-xs font-semibold text-slate-700">To connect Stripe:</p>
-                  <ol className="text-xs text-slate-600 space-y-1 list-decimal list-inside">
-                    <li>Get API keys from <a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noreferrer" className="text-primary underline">stripe.com/dashboard</a></li>
-                    <li>Add <code className="bg-slate-100 px-1 rounded">STRIPE_SECRET_KEY</code> and <code className="bg-slate-100 px-1 rounded">VITE_STRIPE_PUBLISHABLE_KEY</code> to Vercel environment variables</li>
-                    <li>Add webhook endpoint and set <code className="bg-slate-100 px-1 rounded">STRIPE_WEBHOOK_SECRET</code></li>
-                  </ol>
-                </div>
-              )}
-
-              <div className="mt-auto pt-6 border-t border-slate-100">
-                <a
-                  href="https://dashboard.stripe.com"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="w-full bg-primary/10 text-primary hover:bg-primary/20 px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
-                >
-                  {connected ? t.manageSettings : 'Open Stripe Dashboard'}
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
-                </a>
+        {/* Stripe Card — per-user keys, available on all plans */}
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm shadow-slate-200/50 p-6 flex flex-col">
+          <div className="flex justify-between items-start mb-5">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded bg-primary/10 text-primary flex items-center justify-center font-bold text-xl">S</div>
+              <div>
+                <h3 className="font-bold text-lg leading-tight">Stripe</h3>
+                <p className="text-sm text-slate-500 leading-tight">{t.stripeDesc}</p>
               </div>
             </div>
-          );
-        })()}
+            {stripeStatus?.connected ? (
+              <div className="bg-emerald-50 text-emerald-700 text-xs font-medium px-2 py-1 rounded-full flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />{t.connected}
+              </div>
+            ) : (
+              <div className="bg-slate-100 text-slate-500 text-xs font-medium px-2 py-1 rounded-full flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 bg-slate-400 rounded-full" />{t.notConnected}
+              </div>
+            )}
+          </div>
+
+          {stripeStatus?.connected ? (
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-5 space-y-2 flex-1">
+              <div className="flex items-center gap-1.5 text-emerald-600 text-xs font-medium">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                Keys verified
+              </div>
+              <p className="text-xs text-slate-500">
+                Mode: <span className={`font-semibold ${stripeStatus.environment === 'live' ? 'text-emerald-600' : 'text-amber-600'}`}>
+                  {stripeStatus.environment === 'live' ? 'Live' : 'Test'}
+                </span>
+              </p>
+              <p className="text-xs text-slate-400 font-mono truncate">{stripeStatus.publishableKey?.slice(0, 24)}…</p>
+            </div>
+          ) : (
+            <form onSubmit={handleStripeConnect} className="space-y-3 flex-1">
+              {stripeError && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2">{stripeError}</p>}
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">Publishable Key (pk_...)</label>
+                <input
+                  type="text"
+                  value={stripeForm.publishableKey}
+                  onChange={e => setStripeForm(f => ({ ...f, publishableKey: e.target.value }))}
+                  placeholder="pk_live_..."
+                  className="w-full border border-slate-200 focus:ring-primary/20 focus:border-primary rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 transition-all"
+                  required
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">Secret Key (sk_...)</label>
+                <input
+                  type="password"
+                  value={stripeForm.secretKey}
+                  onChange={e => setStripeForm(f => ({ ...f, secretKey: e.target.value }))}
+                  placeholder="sk_live_..."
+                  className="w-full border border-slate-200 focus:ring-primary/20 focus:border-primary rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 transition-all"
+                  required
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">Mode</label>
+                <select
+                  value={stripeForm.environment}
+                  onChange={e => setStripeForm(f => ({ ...f, environment: e.target.value }))}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                >
+                  <option value="live">Live</option>
+                  <option value="test">Test</option>
+                </select>
+              </div>
+              <button
+                type="submit"
+                disabled={stripeConnecting}
+                className="w-full bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-60"
+              >
+                {stripeConnecting ? 'Verifying…' : 'Connect Stripe'}
+              </button>
+              <p className="text-[10px] text-slate-400 text-center">
+                Get keys from <a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noreferrer" className="underline text-primary">dashboard.stripe.com</a>
+              </p>
+            </form>
+          )}
+
+          {stripeStatus?.connected && (
+            <div className="mt-auto pt-4 border-t border-slate-100 flex gap-2">
+              <button onClick={handleStripeDisconnect} className="text-sm font-medium text-red-500 hover:text-red-700">Disconnect</button>
+              <a href="https://dashboard.stripe.com" target="_blank" rel="noreferrer"
+                className="ml-auto bg-primary/10 text-primary hover:bg-primary/20 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5">
+                Dashboard
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </a>
+            </div>
+          )}
+        </div>
 
         {/* PayPal Card */}
         {(() => {

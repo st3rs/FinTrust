@@ -373,7 +373,8 @@ async function startServer() {
     res.json({ status: data?.status ?? "NOT_FOUND" });
   });
 
-  // ── Gateway status — public, no auth ────────────────────────────────────
+  // ── Gateway status — returns platform-level status only ─────────────────
+  // Per-user Stripe status is in GET /api/gateways/stripe/status (authenticated)
   app.get("/api/gateways/status", (_req, res) => {
     const stripeOk = Boolean(process.env.STRIPE_SECRET_KEY);
     const paypalOk = Boolean(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_SECRET);
@@ -405,14 +406,21 @@ async function startServer() {
       .eq("id", invoiceId)
       .maybeSingle();
 
-    // Check operator's plan — Stripe requires Pro
+    // Resolve Stripe key: prefer operator's own key, fall back to platform key
+    let stripeKey = process.env.STRIPE_SECRET_KEY ?? "";
     if (inv?.user_id) {
-      const { data: operatorData } = await supabaseAdmin.auth.admin.getUserById(inv.user_id);
-      const plan = (operatorData?.user?.user_metadata?.plan as string) ?? "free";
-      if (plan !== "pro") {
-        res.status(403).json({ error: "Card payments require a Pro plan.", code: "PLAN_LIMIT_REACHED", upgradeRequired: true });
-        return;
-      }
+      const { data: gw } = await supabaseAdmin
+        .from("gateway_configs")
+        .select("secret_key")
+        .eq("user_id", inv.user_id)
+        .eq("gateway", "stripe")
+        .maybeSingle();
+      if (gw?.secret_key) stripeKey = gw.secret_key;
+    }
+
+    if (!stripeKey) {
+      res.status(503).json({ error: "Stripe is not connected. Go to Settings → Payment Gateways and connect your Stripe account." });
+      return;
     }
 
     if (!inv) { res.status(404).json({ error: "Invoice not found" }); return; }
@@ -976,6 +984,97 @@ async function startServer() {
       return;
     }
     res.status(201).json({ data });
+  });
+
+  // ── Per-operator Stripe key management ───────────────────────────────────
+  // Each operator saves their own Stripe keys. Keys stored in gateway_configs
+  // table (service_role only — never exposed to frontend directly).
+
+  api.post("/gateways/stripe/connect", async (req, res) => {
+    const { userId } = req as unknown as AuthenticatedRequest;
+    const { publishableKey, secretKey, environment = "live" } = req.body as {
+      publishableKey: string;
+      secretKey: string;
+      environment?: string;
+    };
+
+    if (!publishableKey || !secretKey) {
+      res.status(400).json({ error: "Both publishableKey and secretKey are required." });
+      return;
+    }
+    if (!secretKey.startsWith("sk_")) {
+      res.status(400).json({ error: "Invalid secret key format. Must start with sk_live_ or sk_test_" });
+      return;
+    }
+
+    // Quick verify — retrieve balance to confirm keys work
+    try {
+      const stripe = new Stripe(secretKey);
+      await stripe.balance.retrieve();
+    } catch {
+      res.status(400).json({ error: "Stripe keys verification failed. Check that the keys are correct." });
+      return;
+    }
+
+    const { error } = await supabaseAdmin.from("gateway_configs").upsert(
+      { user_id: userId, gateway: "stripe", publishable_key: publishableKey, secret_key: secretKey, environment, updated_at: new Date().toISOString() },
+      { onConflict: "user_id,gateway" }
+    );
+
+    if (error) { res.status(500).json({ error: error.message }); return; }
+
+    addLog("system", `Stripe connected for user ${userId}`, { environment });
+    res.json({ connected: true, environment });
+  });
+
+  api.delete("/gateways/stripe/disconnect", async (req, res) => {
+    const { userId } = req as unknown as AuthenticatedRequest;
+    await supabaseAdmin.from("gateway_configs").delete().eq("user_id", userId).eq("gateway", "stripe");
+    res.json({ disconnected: true });
+  });
+
+  api.get("/gateways/stripe/status", async (req, res) => {
+    const { userId } = req as unknown as AuthenticatedRequest;
+    const { data } = await supabaseAdmin
+      .from("gateway_configs")
+      .select("publishable_key, environment, updated_at")
+      .eq("user_id", userId)
+      .eq("gateway", "stripe")
+      .maybeSingle();
+
+    res.json({
+      connected: Boolean(data),
+      publishableKey: data?.publishable_key ?? null,
+      environment: data?.environment ?? null,
+      connectedAt: data?.updated_at ?? null,
+    });
+  });
+
+  // ── PromptPay usage tracking ──────────────────────────────────────────────
+  // Called when operator generates a QR in the PromptPay page.
+  // Returns usage count + limit so frontend can show progress.
+
+  api.get("/qr-payments/usage", async (req, res) => {
+    const { userId } = req as AuthenticatedRequest;
+    const { data: userData } = await supabaseAdmin.auth.admin.getUserById(userId);
+    const planId: string = (userData?.user?.user_metadata?.plan as string) ?? "free";
+    const limit = planId === "pro" ? null : 10;
+
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+
+    const { count } = await supabaseAdmin
+      .from("qr_payments")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .gte("created_at", startOfMonth.toISOString());
+
+    res.json({
+      used: count ?? 0,
+      limit,
+      canGenerate: limit === null || (count ?? 0) < limit,
+    });
   });
 
   // ── Plan upgrade via Stripe Subscription ─────────────────────────────────
