@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { generatePromptPayQRBase64 } from '../lib/promptpay';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { useLanguage } from './language-provider';
 import { useAuth } from '../lib/auth-context';
 import { Upload, Trash2, Image } from 'lucide-react';
@@ -70,7 +70,14 @@ const translations = {
   }
 };
 
+interface GatewayStatus {
+  stripe: { connected: boolean; mode: string | null };
+  paypal: { connected: boolean; environment: string | null };
+  promptpay: { connected: boolean };
+}
+
 export default function Settings() {
+  const reduced = useReducedMotion();
   const { user, companyName: authCompanyName, updateMetadata } = useAuth();
   const [promptPayId, setPromptPayId] = useState(user?.user_metadata?.promptpay_id || localStorage.getItem('promptPayId') || '');
   const [promptPayError, setPromptPayError] = useState('');
@@ -79,6 +86,7 @@ export default function Settings() {
   const [companyLogoUrl, setCompanyLogoUrl] = useState(user?.user_metadata?.logo_url || localStorage.getItem('companyLogoUrl') || '');
   const [companyLogo, setCompanyLogo] = useState(user?.user_metadata?.company_logo || localStorage.getItem('companyLogo') || '');
   const [saveSuccess, setSaveSuccess] = useState('');
+  const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus | null>(null);
   const { language: lang, setLanguage: changeLanguage } = useLanguage();
 
   const t = translations[lang];
@@ -89,6 +97,14 @@ export default function Settings() {
         .then(setQrPreview)
         .catch(() => {});
     }
+  }, []);
+
+  // Fetch real gateway connection status from server
+  useEffect(() => {
+    fetch('/api/gateways/status')
+      .then((r) => r.json())
+      .then(setGatewayStatus)
+      .catch(() => {});
   }, []);
 
   const handleSaveCompany = async () => {
@@ -216,7 +232,7 @@ export default function Settings() {
                 type="text" 
                 value={companyName}
                 onChange={(e) => setCompanyName(e.target.value)}
-                className="w-full bg-white border border-slate-200 focus:ring-indigo-500/20 focus:border-indigo-500 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 transition-all font-medium text-slate-800"
+                className="w-full bg-white border border-slate-200 focus:ring-primary/20 focus:border-primary rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 transition-all font-medium text-slate-800"
               />
             </div>
 
@@ -264,7 +280,7 @@ export default function Settings() {
                 placeholder="https://example.com/logo.png"
                 value={companyLogoUrl}
                 onChange={(e) => setCompanyLogoUrl(e.target.value)}
-                className="w-full bg-white border border-slate-200 focus:ring-indigo-500/20 focus:border-indigo-500 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 transition-all font-mono text-xs text-slate-700 placeholder:font-sans placeholder:text-slate-400"
+                className="w-full bg-white border border-slate-200 focus:ring-primary/20 focus:border-primary rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 transition-all font-mono text-xs text-slate-700 placeholder:font-sans placeholder:text-slate-400"
               />
             </div>
 
@@ -273,7 +289,7 @@ export default function Settings() {
 
           <div className="mt-auto pt-6 border-t border-slate-100">
             <button 
-              className="bg-indigo-600 text-white hover:bg-indigo-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              className="bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
               onClick={handleSaveCompany}
             >
               {t.saveCompanyDetails}
@@ -284,83 +300,152 @@ export default function Settings() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* Stripe Card */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm shadow-slate-200/50 p-6 flex flex-col">
-          <div className="flex justify-between items-start mb-6">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-xl">
-                S
+        {(() => {
+          const stripe = gatewayStatus?.stripe;
+          const connected = stripe?.connected ?? false;
+          const mode = stripe?.mode;
+          return (
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm shadow-slate-200/50 p-6 flex flex-col">
+              <div className="flex justify-between items-start mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded bg-primary/10 text-primary flex items-center justify-center font-bold text-xl">
+                    S
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-lg leading-tight">Stripe</h3>
+                    <p className="text-sm text-slate-500 leading-tight">{t.stripeDesc}</p>
+                  </div>
+                </div>
+                {connected ? (
+                  <div className="bg-emerald-50 text-emerald-700 text-xs font-medium px-2 py-1 rounded-full flex items-center gap-1.5">
+                    <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
+                    {t.connected}
+                  </div>
+                ) : (
+                  <div className="bg-slate-100 text-slate-500 text-xs font-medium px-2 py-1 rounded-full flex items-center gap-1.5">
+                    <div className="w-1.5 h-1.5 bg-slate-400 rounded-full" />
+                    {t.notConnected}
+                  </div>
+                )}
               </div>
-              <div>
-                <h3 className="font-bold text-lg leading-tight">Stripe</h3>
-                <p className="text-sm text-slate-500 leading-tight">{t.stripeDesc}</p>
+
+              {connected ? (
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-6 space-y-2">
+                  <div className="flex items-center gap-1.5 text-emerald-600 text-xs font-medium">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12" /></svg>
+                    {t.apiKeyVerify}
+                  </div>
+                  {mode && (
+                    <p className="text-xs text-slate-500">
+                      Mode: <span className={`font-semibold ${mode === 'live' ? 'text-emerald-600' : 'text-amber-600'}`}>
+                        {mode === 'live' ? 'Live' : 'Test'}
+                      </span>
+                      {mode === 'test' && ' — switch to live keys when ready to go live'}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="border border-dashed border-slate-300 rounded-lg p-4 mb-6 bg-slate-50/50 space-y-2">
+                  <p className="text-xs font-semibold text-slate-700">To connect Stripe:</p>
+                  <ol className="text-xs text-slate-600 space-y-1 list-decimal list-inside">
+                    <li>Get API keys from <a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noreferrer" className="text-primary underline">stripe.com/dashboard</a></li>
+                    <li>Add <code className="bg-slate-100 px-1 rounded">STRIPE_SECRET_KEY</code> and <code className="bg-slate-100 px-1 rounded">VITE_STRIPE_PUBLISHABLE_KEY</code> to Vercel environment variables</li>
+                    <li>Add webhook endpoint and set <code className="bg-slate-100 px-1 rounded">STRIPE_WEBHOOK_SECRET</code></li>
+                  </ol>
+                </div>
+              )}
+
+              <div className="mt-auto pt-6 border-t border-slate-100">
+                <a
+                  href="https://dashboard.stripe.com"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-full bg-primary/10 text-primary hover:bg-primary/20 px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
+                >
+                  {connected ? t.manageSettings : 'Open Stripe Dashboard'}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
+                </a>
               </div>
             </div>
-            <div className="bg-green-50 text-green-700 text-xs font-medium px-2 py-1 rounded-full flex items-center gap-1.5">
-              <div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
-              {t.connected}
-            </div>
-          </div>
-
-          <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-6">
-            <label className="block text-xs font-semibold text-slate-700 mb-2">{t.liveKey}</label>
-            <div className="flex items-center justify-between border border-slate-200 bg-white rounded p-2 mb-3">
-              <span className="text-slate-800 font-mono text-sm tracking-widest">••••••••••••••••</span>
-              <button className="text-slate-400 hover:text-slate-600">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-              </button>
-            </div>
-            <div className="flex items-center gap-1.5 text-green-600 text-xs font-medium">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
-              {t.apiKeyVerify}
-            </div>
-          </div>
-
-          <div className="mt-auto pt-6 border-t border-slate-100 flex items-center justify-between">
-            <button className="text-sm font-medium text-slate-600 hover:text-slate-900">{t.disconnect}</button>
-            <button className="bg-indigo-50 text-indigo-600 hover:bg-indigo-100 px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-              {t.manageSettings}
-            </button>
-          </div>
-        </div>
+          );
+        })()}
 
         {/* PayPal Card */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm shadow-slate-200/50 p-6 flex flex-col">
-          <div className="flex justify-between items-start mb-6">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded bg-indigo-50 text-indigo-900 flex items-center justify-center font-bold text-xl italic">
-                P
+        {(() => {
+          const paypal = gatewayStatus?.paypal;
+          const connected = paypal?.connected ?? false;
+          const env = paypal?.environment;
+          return (
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm shadow-slate-200/50 p-6 flex flex-col">
+              <div className="flex justify-between items-start mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded bg-primary/10 text-primary flex items-center justify-center font-bold text-xl italic">
+                    P
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-lg leading-tight">PayPal</h3>
+                    <p className="text-sm text-slate-500 leading-tight">{t.paypalDesc}</p>
+                  </div>
+                </div>
+                {connected ? (
+                  <div className="bg-emerald-50 text-emerald-700 text-xs font-medium px-2 py-1 rounded-full flex items-center gap-1.5">
+                    <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
+                    {t.connected}
+                  </div>
+                ) : (
+                  <div className="bg-slate-100 text-slate-500 text-xs font-medium px-2 py-1 rounded-full flex items-center gap-1.5">
+                    <div className="w-1.5 h-1.5 bg-slate-400 rounded-full" />
+                    {t.notConnected}
+                  </div>
+                )}
               </div>
-              <div>
-                <h3 className="font-bold text-lg leading-tight">PayPal</h3>
-                <p className="text-sm text-slate-500 leading-tight">{t.paypalDesc}</p>
+
+              {connected ? (
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-6 space-y-2">
+                  <div className="flex items-center gap-1.5 text-emerald-600 text-xs font-medium">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12" /></svg>
+                    Credentials verified
+                  </div>
+                  {env && (
+                    <p className="text-xs text-slate-500">
+                      Environment: <span className={`font-semibold ${env === 'live' ? 'text-emerald-600' : 'text-amber-600'}`}>
+                        {env === 'live' ? 'Live' : 'Sandbox'}
+                      </span>
+                      {env === 'sandbox' && ' — set PAYPAL_ENVIRONMENT=live when ready'}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="border border-dashed border-slate-300 rounded-lg p-4 mb-6 bg-slate-50/50 space-y-2">
+                  <p className="text-xs font-semibold text-slate-700">To connect PayPal:</p>
+                  <ol className="text-xs text-slate-600 space-y-1 list-decimal list-inside">
+                    <li>Create app at <a href="https://developer.paypal.com/dashboard/applications" target="_blank" rel="noreferrer" className="text-primary underline">developer.paypal.com</a></li>
+                    <li>Add <code className="bg-slate-100 px-1 rounded">PAYPAL_CLIENT_ID</code>, <code className="bg-slate-100 px-1 rounded">PAYPAL_CLIENT_SECRET</code>, and <code className="bg-slate-100 px-1 rounded">VITE_PAYPAL_CLIENT_ID</code> to Vercel</li>
+                    <li>Set <code className="bg-slate-100 px-1 rounded">PAYPAL_ENVIRONMENT=sandbox</code> for testing</li>
+                  </ol>
+                </div>
+              )}
+
+              <div className="mt-auto pt-6 border-t border-slate-100">
+                <a
+                  href="https://developer.paypal.com/dashboard"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-full bg-primary/10 text-primary hover:bg-primary/20 px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
+                >
+                  {connected ? t.manageSettings : 'Open PayPal Developer'}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
+                </a>
               </div>
             </div>
-            <div className="bg-slate-100 text-slate-500 text-xs font-medium px-2 py-1 rounded-full flex items-center gap-1.5">
-              <div className="w-1.5 h-1.5 bg-slate-400 rounded-full"></div>
-              {t.notConnected}
-            </div>
-          </div>
-
-          <div className="border border-dashed border-slate-300 rounded-lg p-6 mb-6 flex flex-col items-center justify-center text-center bg-slate-50/50">
-             <div className="w-10 h-10 bg-white shadow-sm border border-slate-200 rounded-lg flex items-center justify-center mb-3 text-slate-400">
-               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line></svg>
-             </div>
-             <p className="text-sm text-slate-600">{t.paypalInfo}</p>
-          </div>
-
-          <div className="mt-auto pt-6 border-t border-slate-100">
-            <button className="w-full bg-indigo-600 text-white hover:bg-indigo-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
-              {t.connectPaypal}
-            </button>
-          </div>
-        </div>
+          );
+        })()}
 
         {/* PromptPay QR Card */}
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm shadow-slate-200/50 p-6 flex flex-col">
           <div className="flex justify-between items-start mb-6">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded bg-slate-100 text-slate-600 flex items-center justify-center font-bold">
+              <div className="w-10 h-10 rounded bg-primary/10 text-primary flex items-center justify-center font-bold">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><path d="M7 7h.01"></path><path d="M17 7h.01"></path><path d="M7 17h.01"></path><path d="M17 17h.01"></path></svg>
               </div>
               <div>
@@ -368,10 +453,17 @@ export default function Settings() {
                 <p className="text-sm text-slate-500 leading-tight">{t.promptPayDesc}</p>
               </div>
             </div>
-            <div className="bg-slate-100 text-slate-500 text-xs font-medium px-2 py-1 rounded-full flex items-center gap-1.5">
-              <div className="w-1.5 h-1.5 bg-slate-400 rounded-full"></div>
-              {t.notConnected}
-            </div>
+            {(/^\d+$/.test(promptPayId) && [10, 13, 15].includes(promptPayId.length)) ? (
+              <div className="bg-emerald-50 text-emerald-700 text-xs font-medium px-2 py-1 rounded-full flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
+                {t.connected}
+              </div>
+            ) : (
+              <div className="bg-slate-100 text-slate-500 text-xs font-medium px-2 py-1 rounded-full flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 bg-slate-400 rounded-full" />
+                {t.notConnected}
+              </div>
+            )}
           </div>
 
           <div className="mb-6 space-y-4 text-sm text-slate-600">
@@ -387,18 +479,18 @@ export default function Settings() {
                   setPromptPayId(e.target.value);
                   if (promptPayError) setPromptPayError(''); // clear error on type
                 }}
-                className={`w-full bg-white border ${promptPayError ? 'border-red-500 focus:ring-red-500/20 focus:border-red-500' : 'border-slate-200 focus:ring-indigo-500/20 focus:border-indigo-500'} rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 transition-all font-mono placeholder:font-sans`}
+                className={`w-full bg-white border ${promptPayError ? 'border-red-500 focus:ring-red-500/20 focus:border-red-500' : 'border-slate-200 focus:ring-primary/20 focus:border-primary'} rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 transition-all font-mono placeholder:font-sans`}
               />
               {promptPayError && <p className="text-red-500 text-xs mt-1.5 font-medium">{promptPayError}</p>}
             </div>
             
             <AnimatePresence>
               {qrPreview && (
-                <motion.div 
-                  initial={{ opacity: 0, y: 5 }}
+                <motion.div
+                  initial={{ opacity: 0, y: reduced ? 0 : 5 }}
                   animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  transition={{ duration: 0.2 }}
+                  exit={{ opacity: 0, scale: reduced ? 1 : 0.95 }}
+                  transition={{ duration: reduced ? 0.15 : 0.2 }}
                   className="qr-preview-container mt-4 p-4 border border-slate-200 rounded-lg flex flex-col items-center justify-center bg-slate-50 relative"
                 >
                   <div className="flex w-full items-center justify-between mb-3 px-1">
@@ -418,7 +510,7 @@ export default function Settings() {
                     <a
                       href={qrPreview}
                       download={`promptpay-qr-${promptPayId}.png`}
-                      className="flex-1 text-center bg-indigo-50 text-indigo-600 hover:bg-indigo-100 px-3 py-2 rounded-md text-sm font-medium transition-colors border border-indigo-200 flex items-center justify-center gap-1.5"
+                      className="flex-1 text-center bg-primary/10 text-primary hover:bg-primary/20 px-3 py-2 rounded-md text-sm font-medium transition-colors border border-primary/20 flex items-center justify-center gap-1.5"
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                       Download
@@ -463,7 +555,7 @@ export default function Settings() {
 
           <div className="mt-auto pt-6 border-t border-slate-100">
             <button 
-              className="w-full bg-indigo-600 text-white hover:bg-indigo-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              className="w-full bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
               onClick={handleSavePromptPay}
             >
               {t.saveDetails}

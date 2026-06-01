@@ -218,7 +218,7 @@ SEED_DB=true npm run dev   # Inserts sample invoices on first boot
 ## Known Limitations / TODO
 
 - [ ] Webhook retry is currently simulated — wire to real webhook delivery queue
-- [ ] `total_billed` on customers is not auto-updated — needs a Supabase trigger or manual update after payment
+- [x] `total_billed` on customers is auto-updated via `syncCustomerTotalBilled()` after every confirmed payment
 - [ ] No pagination on list endpoints — add `?limit=&offset=` when data grows
-- [ ] No rate limiting on API — add `express-rate-limit` before going public
+- [x] Rate limiting added: public routes 30/min, auth routes 20/15min, API routes 120/min
 - [ ] QR payment status polling not implemented — needs SCB/KBank callback webhook

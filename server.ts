@@ -5,6 +5,7 @@ import cors from "cors";
 import { createServer as createViteServer } from "vite";
 import { randomUUID } from "crypto";
 import Stripe from "stripe";
+import rateLimit from "express-rate-limit";
 import { supabaseAdmin, createUserClient } from "./lib/supabase.js";
 import { requireAuth, type AuthenticatedRequest } from "./middleware/auth.js";
 
@@ -142,6 +143,42 @@ async function getPayPalToken(): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
+// Customer total_billed helper
+// Recalculates and updates total_billed from all PAID invoices for a client.
+// Called after every confirmed payment to keep the customers table accurate.
+// ---------------------------------------------------------------------------
+
+async function syncCustomerTotalBilled(
+  clientName: string,
+  userId: string
+): Promise<void> {
+  try {
+    // Sum all PAID invoices for this client
+    const { data: invoices } = await supabaseAdmin
+      .from("invoices")
+      .select("amount")
+      .eq("user_id", userId)
+      .eq("client", clientName)
+      .eq("status", "PAID");
+
+    const total = (invoices ?? []).reduce(
+      (sum, inv) => sum + Number(inv.amount),
+      0
+    );
+
+    // Update the customers row (match by name + user_id)
+    await supabaseAdmin
+      .from("customers")
+      .update({ total_billed: total })
+      .eq("user_id", userId)
+      .eq("name", clientName);
+  } catch (err) {
+    // Non-critical — log and continue; don't break the payment flow
+    console.error("[syncCustomerTotalBilled]", err);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Express app
 // ---------------------------------------------------------------------------
 
@@ -150,6 +187,40 @@ async function startServer() {
   const PORT = Number(process.env.PORT) || 3000;
 
   app.use(cors());
+
+  // ── Rate limiting ────────────────────────────────────────────────────────
+  // Separate limits per surface: public endpoints (unauthenticated) are tighter.
+
+  // Public payment routes — customer-facing, tighter window
+  const publicPaymentLimiter = rateLimit({
+    windowMs: 60_000,       // 1 minute
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many requests, please try again shortly." },
+  });
+
+  // Auth routes (login / register)
+  const authLimiter = rateLimit({
+    windowMs: 15 * 60_000,  // 15 minutes
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many authentication attempts, please try again later." },
+  });
+
+  // General API (authenticated operator routes)
+  const apiLimiter = rateLimit({
+    windowMs: 60_000,
+    max: 120,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "API rate limit reached, please slow down." },
+  });
+
+  app.use("/api/public", publicPaymentLimiter);
+  app.use("/api/auth", authLimiter);
+  app.use("/api", apiLimiter);
 
   // ── Stripe webhook ── raw body MUST come before express.json() ──────────
   // Stripe signs the raw payload; parsing it first breaks signature verification.
@@ -196,6 +267,9 @@ async function startServer() {
             client: session.customer_details?.name ?? session.customer_details?.email ?? "Customer",
             user_id: userId,
           });
+
+          const clientName = session.customer_details?.name ?? session.customer_details?.email ?? "Customer";
+          await syncCustomerTotalBilled(clientName, userId);
 
           addLog("payment_confirmation", `Stripe payment confirmed: ${invoiceId}`, {
             sessionId: session.id,
@@ -359,6 +433,7 @@ async function startServer() {
             client: inv.client,
             user_id: userId,
           });
+          await syncCustomerTotalBilled(inv.client, userId);
           addLog("payment_confirmation", `PayPal payment captured: ${invoiceId}`, {
             orderId: req.params.orderId,
             captureId: capture?.id,
@@ -593,6 +668,7 @@ async function startServer() {
       user_id: userId,
     });
 
+    await syncCustomerTotalBilled(inv.client, userId);
     addLog(
       "payment_confirmation",
       `Payment received for ${inv.metadata?.invoiceNumber ?? inv.id}`,
