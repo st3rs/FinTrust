@@ -117,7 +117,7 @@ export default function Layout() {
   const trialDaysLeft = realTrialDaysLeft;
 
   return (
-    <div className="flex h-screen bg-[#f6f9fc] dark:bg-[#0a0a0b] text-slate-900 font-sans overflow-hidden">
+    <div className="flex h-screen bg-surface-shell text-slate-900 font-sans overflow-hidden">
       {/* Mobile Sidebar Overlay */}
       {sidebarOpen && (
         <div 
@@ -127,10 +127,10 @@ export default function Layout() {
       )}
 
       {/* Sidebar */}
-      <aside className={`fixed inset-y-0 left-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col z-30 shrink-0 w-64 transform transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:block ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+      <aside id="sidebar" className={`fixed inset-y-0 left-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col z-30 shrink-0 w-64 transform transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:block ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="p-6 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-indigo-600 text-white rounded-md flex items-center justify-center font-bold text-xl">
+            <div className="w-10 h-10 bg-primary text-primary-foreground rounded-md flex items-center justify-center font-bold text-xl select-none">
               F
             </div>
             <div>
@@ -138,7 +138,7 @@ export default function Layout() {
               <h2 className="font-semibold text-xs leading-tight text-slate-500 dark:text-slate-400 truncate max-w-[140px]">{companyName}</h2>
             </div>
           </div>
-          <button className="lg:hidden text-slate-500 hover:text-slate-900 dark:hover:text-white" onClick={closeSidebar}>
+          <button aria-label="Close sidebar" className="lg:hidden text-slate-500 hover:text-slate-900 dark:hover:text-white" onClick={closeSidebar}>
             <X className="w-6 h-6" />
           </button>
         </div>
@@ -184,13 +184,15 @@ export default function Layout() {
             {t.createInvoice}
           </Button>
 
-          <div 
+          <button
+            type="button"
+            aria-label="Sign out"
             onClick={async () => {
               closeSidebar();
               await signOut();
               navigate('/login');
             }}
-            className="flex items-center justify-between cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 p-2 -mx-2 rounded-lg transition-colors group"
+            className="w-full flex items-center justify-between cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 p-2 -mx-2 rounded-lg transition-colors group"
           >
             <div className="flex items-center gap-3 overflow-hidden">
               <div className="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold text-sm shrink-0">
@@ -203,7 +205,7 @@ export default function Layout() {
             <div className="text-slate-400 group-hover:text-red-500 transition-colors shrink-0">
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
             </div>
-          </div>
+          </button>
         </div>
       </aside>
 
@@ -212,7 +214,10 @@ export default function Layout() {
         {/* Top Header */}
         <header className="h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-4 sm:px-6 lg:px-8 shrink-0 relative z-10">
           <div className="flex items-center gap-2 lg:gap-4">
-            <button 
+            <button
+              aria-label="Open menu"
+              aria-expanded={sidebarOpen}
+              aria-controls="sidebar"
               className="lg:hidden p-2 -ml-2 text-slate-500 hover:text-slate-900 dark:hover:text-white"
               onClick={() => setSidebarOpen(true)}
             >
@@ -236,9 +241,9 @@ export default function Layout() {
             <ModeToggle />
             <DropdownMenu>
               <DropdownMenuTrigger render={
-                <button className="hover:text-slate-900 dark:hover:text-slate-100 transition-colors hidden sm:block p-1.5 sm:p-2 relative">
-                  <Bell className="w-5 h-5 sm:w-5 sm:h-5" />
-                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full"></span>
+                <button aria-label="Notifications" aria-haspopup="true" className="hover:text-slate-900 dark:hover:text-slate-100 transition-colors hidden sm:flex items-center justify-center p-2 sm:p-2.5 relative">
+                  <Bell className="w-5 h-5" />
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full" aria-hidden="true"></span>
                 </button>
               } />
               <DropdownMenuContent align="end" className="w-[280px]">
@@ -257,17 +262,23 @@ export default function Layout() {
               </DropdownMenuContent>
             </DropdownMenu>
 
-            <button className="hover:text-slate-900 dark:hover:text-slate-100 transition-colors hidden sm:block p-1.5 sm:p-2">
-              <HelpCircle className="w-5 h-5 sm:w-5 sm:h-5" />
+            <button aria-label="Help" className="hover:text-slate-900 dark:hover:text-slate-100 transition-colors hidden sm:flex items-center justify-center p-2 sm:p-2.5">
+              <HelpCircle className="w-5 h-5" />
             </button>
-            <button className="hover:text-slate-900 dark:hover:text-slate-100 transition-colors sm:hidden p-1.5">
+            <button aria-label="Search" className="hover:text-slate-900 dark:hover:text-slate-100 transition-colors sm:hidden flex items-center justify-center p-2">
               <Search className="w-5 h-5" />
             </button>
 
             <DropdownMenu>
               <DropdownMenuTrigger render={
-                <button className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden ml-1 sm:ml-2 border border-slate-300 dark:border-slate-600 shrink-0 focus:outline-none focus:ring-2 focus:ring-primary/20 flex flex-col items-center justify-center">
-                   <img src={`https://ui-avatars.com/api/?name=${encodeURIComponent(firstName + ' ' + lastName)}&background=random`} alt="Avatar" className="w-full h-full object-cover" />
+                <button
+                  aria-label={`Account menu for ${firstName || user?.email || 'User'}`}
+                  aria-haspopup="true"
+                  className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-primary/10 dark:bg-primary/20 ml-1 sm:ml-2 shrink-0 focus:outline-none focus:ring-2 focus:ring-primary/30 flex items-center justify-center"
+                >
+                  <span className="text-xs font-bold text-primary select-none" aria-hidden="true">
+                    {firstName ? firstName[0]?.toUpperCase() : user?.email?.[0]?.toUpperCase() ?? 'U'}
+                  </span>
                 </button>
               } />
               <DropdownMenuContent align="end" className="w-[200px]">

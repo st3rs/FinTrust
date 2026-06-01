@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Plus, 
   Search, 
@@ -65,6 +65,49 @@ export default function PromptPay() {
     isReusable: false,
     allowCustomAmount: false
   });
+
+  // ─── Live QR preview ──────────────────────────────────────────────────────
+  // Generate QR automatically whenever the PromptPay ID or amount changes,
+  // without requiring the user to click Generate first.
+  useEffect(() => {
+    const id = formData.promptPayId;
+    const isValidId = id.length === 10 || id.length === 13;
+
+    if (!isValidId) {
+      setGeneratedQR(null);
+      return;
+    }
+
+    // Dynamic QR needs an amount; static can be open (any amount)
+    if (qrType === 'dynamic' && !formData.amount) {
+      setGeneratedQR(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const timer = setTimeout(async () => {
+      try {
+        const amount = formData.amount ? parseFloat(formData.amount) : undefined;
+        const payload = generatePayload(id, {
+          amount: amount && amount > 0 ? amount : undefined,
+        });
+        const dataUrl = await QRCode.toDataURL(payload, {
+          width: 250,
+          margin: 2,
+          color: { dark: '#0f172a', light: '#ffffff' },
+        });
+        if (!cancelled) setGeneratedQR(dataUrl);
+      } catch {
+        if (!cancelled) setGeneratedQR(null);
+      }
+    }, 350); // 350ms debounce — fast enough to feel live, not too eager
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [formData.promptPayId, formData.amount, formData.allowCustomAmount, qrType]);
 
   const filteredRequests = mockRequests.filter(req => {
     if (statusFilter !== 'ALL' && req.status !== statusFilter) return false;
@@ -516,46 +559,51 @@ export default function PromptPay() {
                 </div>
               )}
               
-              <Tabs value={qrType} onValueChange={setQrType} className="w-full">
+              {/* PromptPay ID — shared between Dynamic and Static tabs */}
+              <div className="grid gap-2 pb-4 border-b border-slate-100 dark:border-slate-800">
+                <Label htmlFor="promptPayId" className="text-slate-700 dark:text-slate-300">
+                  PromptPay ID (Phone or National ID) *
+                </Label>
+                <Input
+                  id="promptPayId"
+                  placeholder="ใส่เบอร์โทร 10 หลัก หรือ เลขบัตรประชาชน 13 หลัก"
+                  value={formData.promptPayId}
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/\D/g, '').slice(0, 13);
+                    setFormData({ ...formData, promptPayId: val });
+                  }}
+                  className={
+                    formData.promptPayId &&
+                    !(formData.promptPayId.length === 10 || formData.promptPayId.length === 13)
+                      ? 'border-red-500 focus-visible:ring-red-500/20 text-red-600'
+                      : ''
+                  }
+                  required
+                />
+                <div className="flex justify-between">
+                  <p className="text-xs text-slate-500">ใช้เบอร์มือถือหรือเลขบัตร ปช. ที่ผูกกับพร้อมเพย์</p>
+                  <p className={`text-xs font-medium ${
+                    formData.promptPayId.length === 0 ? '' :
+                    formData.promptPayId.length === 10 || formData.promptPayId.length === 13
+                      ? 'text-primary'
+                      : 'text-red-500'
+                  }`}>
+                    {formData.promptPayId.length === 0 ? '' :
+                      formData.promptPayId.length === 10 ? 'Phone Number ✓' :
+                      formData.promptPayId.length === 13 ? 'National ID ✓' :
+                      'Invalid (must be 10 or 13 digits)'}
+                  </p>
+                </div>
+              </div>
+
+              <Tabs value={qrType} onValueChange={(v) => { setQrType(v); setGeneratedQR(null); }} className="w-full">
                 <TabsList className="grid w-full grid-cols-2 mb-4 bg-slate-100 dark:bg-slate-900">
                   <TabsTrigger value="dynamic">Dynamic QR</TabsTrigger>
                   <TabsTrigger value="static">Static QR</TabsTrigger>
                 </TabsList>
-                
+
                 {/* Dynamic Content Details */}
                 <TabsContent value="dynamic" className="space-y-5 animate-in fade-in-50">
-                  <div className="grid gap-2">
-                    <Label htmlFor="promptPayId" className="text-slate-700 dark:text-slate-300">PromptPay ID (Phone or National ID) *</Label>
-                    <Input 
-                      id="promptPayId" 
-                      placeholder="ใส่เบอร์โทร 10 หลัก หรือ เลขบัตรประชาชน 13 หลัก"
-                      value={formData.promptPayId}
-                      onChange={(e) => {
-                        const val = e.target.value.replace(/\D/g, '').slice(0, 13);
-                        setFormData({...formData, promptPayId: val});
-                      }}
-                      className={
-                        formData.promptPayId && !(formData.promptPayId.length === 10 || formData.promptPayId.length === 13)
-                          ? 'border-red-500 focus-visible:ring-red-500/20 text-red-600'
-                          : ''
-                      }
-                      required
-                    />
-                    <div className="flex justify-between">
-                      <p className="text-xs text-slate-500">ใช้เบอร์มือถือหรือเลขบัตร ปช. ที่ผูกกับพร้อมเพย์</p>
-                      <p className={`text-xs font-medium ${
-                        formData.promptPayId.length === 0 ? '' :
-                        formData.promptPayId.length === 10 || formData.promptPayId.length === 13 ? 'text-indigo-600' : 
-                        'text-red-500'
-                      }`}>
-                        {formData.promptPayId.length === 0 ? '' : 
-                         formData.promptPayId.length === 10 ? 'Phone Number Valid' : 
-                         formData.promptPayId.length === 13 ? 'National ID Valid' : 
-                         'Invalid length (Must be 10 or 13)'}
-                      </p>
-                    </div>
-                  </div>
-
                   <div className="grid gap-2">
                     <Label htmlFor="amount" className="text-slate-700 dark:text-slate-300">Amount (THB) *</Label>
                     <div className="relative">
