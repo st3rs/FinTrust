@@ -143,6 +143,73 @@ async function getPayPalToken(): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
+// Pagination helper — clamps limit to [1, 100], offset to ≥ 0
+// ---------------------------------------------------------------------------
+
+function getPagination(query: Record<string, any>, defaultLimit = 20) {
+  const limit = Math.min(Math.max(parseInt(String(query.limit ?? "")) || defaultLimit, 1), 100);
+  const offset = Math.max(parseInt(String(query.offset ?? "")) || 0, 0);
+  return { limit, offset };
+}
+
+// ---------------------------------------------------------------------------
+// Real webhook delivery with exponential backoff (3 attempts: 0s, 2s, 4s)
+// ---------------------------------------------------------------------------
+
+async function deliverWebhook(
+  url: string,
+  eventType: string,
+  payload: unknown,
+  logId: string,
+  userId: string,
+  attempt = 1
+): Promise<void> {
+  const MAX_ATTEMPTS = 3;
+  if (attempt > 1) {
+    await new Promise((r) => setTimeout(r, (attempt - 1) * 2_000));
+  }
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-FinTrust-Event": eventType,
+        "X-FinTrust-Attempt": String(attempt),
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10_000), // 10s per attempt
+    });
+
+    // Persist response status back to the log
+    await supabaseAdmin
+      .from("webhook_logs")
+      .update({ response_status: res.status })
+      .eq("id", logId)
+      .eq("user_id", userId);
+
+    if (res.ok) {
+      addLog("webhook", `Webhook delivered to ${url} (attempt ${attempt})`, {
+        logId, status: res.status,
+      });
+    } else if (attempt < MAX_ATTEMPTS) {
+      addLog("webhook", `Webhook attempt ${attempt} failed (HTTP ${res.status}), retrying…`, { logId });
+      await deliverWebhook(url, eventType, payload, logId, userId, attempt + 1);
+    } else {
+      addLog("webhook", `Webhook failed after ${MAX_ATTEMPTS} attempts (HTTP ${res.status})`, { logId });
+    }
+  } catch (err: any) {
+    const reason = err.name === "AbortError" ? "timeout (10s)" : err.message;
+    if (attempt < MAX_ATTEMPTS) {
+      addLog("webhook", `Webhook attempt ${attempt} error: ${reason}, retrying…`, { logId });
+      await deliverWebhook(url, eventType, payload, logId, userId, attempt + 1);
+    } else {
+      addLog("webhook", `Webhook delivery failed: ${reason}`, { logId });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Customer total_billed helper
 // Recalculates and updates total_billed from all PAID invoices for a client.
 // Called after every confirmed payment to keep the customers table accurate.
@@ -511,17 +578,16 @@ async function startServer() {
 
   api.get("/invoices", async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
-    const { data, error } = await supabaseAdmin
+    const { limit, offset } = getPagination(req.query);
+    const { data, error, count } = await supabaseAdmin
       .from("invoices")
-      .select("*")
+      .select("*", { count: "exact" })
       .eq("user_id", userId)
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
 
-    if (error) {
-      res.status(500).json({ error: error.message });
-      return;
-    }
-    res.json({ data });
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    res.json({ data, total: count ?? 0, limit, offset });
   });
 
   api.get("/invoices/:id", async (req, res) => {
@@ -692,34 +758,32 @@ async function startServer() {
 
   api.get("/transactions", async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
-    const { data, error } = await supabaseAdmin
+    const { limit, offset } = getPagination(req.query);
+    const { data, error, count } = await supabaseAdmin
       .from("transactions")
-      .select("*")
+      .select("*", { count: "exact" })
       .eq("user_id", userId)
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
 
-    if (error) {
-      res.status(500).json({ error: error.message });
-      return;
-    }
-    res.json({ data });
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    res.json({ data, total: count ?? 0, limit, offset });
   });
 
   // --- Customers ---
 
   api.get("/customers", async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
-    const { data, error } = await supabaseAdmin
+    const { limit, offset } = getPagination(req.query);
+    const { data, error, count } = await supabaseAdmin
       .from("customers")
-      .select("*")
+      .select("*", { count: "exact" })
       .eq("user_id", userId)
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
 
-    if (error) {
-      res.status(500).json({ error: error.message });
-      return;
-    }
-    res.json({ data });
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    res.json({ data, total: count ?? 0, limit, offset });
   });
 
   api.post("/customers", async (req, res) => {
@@ -741,17 +805,16 @@ async function startServer() {
 
   api.get("/payment-links", async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
-    const { data, error } = await supabaseAdmin
+    const { limit, offset } = getPagination(req.query);
+    const { data, error, count } = await supabaseAdmin
       .from("payment_links")
-      .select("*")
+      .select("*", { count: "exact" })
       .eq("user_id", userId)
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
 
-    if (error) {
-      res.status(500).json({ error: error.message });
-      return;
-    }
-    res.json({ data });
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    res.json({ data, total: count ?? 0, limit, offset });
   });
 
   api.post("/payment-links", async (req, res) => {
@@ -772,15 +835,27 @@ async function startServer() {
   // --- Webhook Retry ---
 
   api.post("/webhooks/retry/:eventId", async (req, res) => {
+    const { userId } = req as unknown as AuthenticatedRequest;
     const { eventId } = req.params;
+
+    const { data: log } = await supabaseAdmin
+      .from("webhook_logs")
+      .select("*")
+      .eq("id", eventId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (!log) {
+      res.status(404).json({ error: "Webhook event not found" });
+      return;
+    }
+
     addLog("system", `Manual retry initiated for webhook ${eventId}`);
 
-    setTimeout(() => {
-      addLog("webhook", `Webhook retried successfully for ${eventId}`, {
-        status: "success",
-        eventId,
-      });
-    }, 1_500);
+    // Fire asynchronously — don't block the HTTP response
+    setImmediate(() =>
+      deliverWebhook(log.url, log.event_type, log.payload, eventId, userId)
+    );
 
     res.json({ message: "Retry initiated", eventId });
   });

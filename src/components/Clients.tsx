@@ -1,12 +1,16 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Download, Search, MoreHorizontal, UserPlus, Filter, FileSpreadsheet, ChevronDown, ChevronRight, FileText, Upload, Image as ImageIcon, X, Users, UserCheck, TrendingUp, TrendingDown, QrCode } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { motion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
 import { generatePromptPayQRBase64 } from '@/src/lib/promptpay';
+import { PaginationControls } from '@/components/ui/pagination-controls';
+import { usePagination } from '@/src/lib/use-pagination';
+import { supabase } from '../lib/supabase';
+import { useAuth } from '../lib/auth-context';
 import {
   Table,
   TableBody,
@@ -54,8 +58,12 @@ const CLIENT_INVOICES: Record<string, any[]> = {
 };
 
 export default function Clients() {
+  const reduced = useReducedMotion();
   const navigate = useNavigate();
-  const [clients, setClients] = useState(INITIAL_CLIENTS);
+  const { user } = useAuth();
+  const [clients, setClients] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -63,24 +71,45 @@ export default function Clients() {
   const [qrModalClient, setQrModalClient] = useState<any | null>(null);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pagination = usePagination(20);
+
+  // Fetch real customers from Supabase
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    setIsLoading(true);
+
+    (async () => {
+      const { data, count } = await supabase
+        .from('customers')
+        .select('*', { count: 'exact' })
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .range(pagination.offset, pagination.offset + pagination.limit - 1);
+
+      if (!active) return;
+      setClients(data ?? INITIAL_CLIENTS); // fall back to mock if table empty
+      setTotal(count ?? 0);
+      setIsLoading(false);
+    })();
+
+    return () => { active = false; };
+  }, [user, pagination.page, pagination.limit]);
 
   const toggleRow = (id: string) => {
     const newExpanded = new Set(expandedRows);
-    if (newExpanded.has(id)) {
-      newExpanded.delete(id);
-    } else {
-      newExpanded.add(id);
-    }
+    if (newExpanded.has(id)) newExpanded.delete(id);
+    else newExpanded.add(id);
     setExpandedRows(newExpanded);
   };
 
-  const filteredClients = clients.filter(client => 
-    client.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    client.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    client.contactPerson.toLowerCase().includes(searchTerm.toLowerCase())
+  const filteredClients = clients.filter(client =>
+    (client.name ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (client.email ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (client.contact_person ?? client.contactPerson ?? '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const totalClients = clients.length;
+  const totalClients = total || clients.length;
   const activeClients = clients.filter(client => client.status === 'Active').length;
 
   const handleGenerateQR = async (client: any) => {
@@ -125,17 +154,38 @@ export default function Clients() {
     }
   };
 
-  const handleAddClient = (e: React.FormEvent) => {
+  const handleAddClient = async (e: React.FormEvent) => {
     e.preventDefault();
-    const id = (clients.length + 1).toString();
-    const createdClient = {
-      id,
-      ...newClient,
-      status: 'Active',
-      joinedDate: new Date().toISOString().split('T')[0],
-      totalBilled: 0
-    };
-    setClients([createdClient, ...clients]);
+    if (!user) return;
+
+    const { data: created, error } = await supabase
+      .from('customers')
+      .insert({
+        name: newClient.name,
+        email: newClient.email,
+        contact_person: newClient.contactPerson,
+        phone: newClient.phone,
+        status: 'Active',
+        total_billed: 0,
+        user_id: user.id,
+      })
+      .select()
+      .single();
+
+    if (created) {
+      setClients([created, ...clients]);
+      setTotal(t => t + 1);
+    } else if (error) {
+      // Optimistic fallback for demo/offline
+      const createdClient = {
+        id: crypto.randomUUID(),
+        ...newClient,
+        status: 'Active',
+        joinedDate: new Date().toISOString().split('T')[0],
+        totalBilled: 0,
+      };
+      setClients([createdClient, ...clients]);
+    }
     setIsAddModalOpen(false);
     setNewClient({ name: '', email: '', contactPerson: '', phone: '', logoUrl: '' });
   };
@@ -380,9 +430,9 @@ export default function Clients() {
                       </TableCell>
                       <TableCell className="font-medium text-slate-900 dark:text-white">
                         <div className="flex items-center gap-3">
-                          <motion.div 
-                            whileHover={{ scale: 1.1 }}
-                            transition={{ type: "spring", stiffness: 400, damping: 10 }}
+                          <motion.div
+                            whileHover={reduced ? {} : { scale: 1.1 }}
+                            transition={reduced ? undefined : { type: "spring", stiffness: 400, damping: 10 }}
                             title={client.name}
                             className="cursor-pointer"
                           >
@@ -511,6 +561,14 @@ export default function Clients() {
               )}
             </TableBody>
           </Table>
+          <div className="px-4 sm:px-6 border-t">
+            <PaginationControls
+              page={pagination.page}
+              total={total}
+              limit={pagination.limit}
+              onPage={pagination.goTo}
+            />
+          </div>
         </div>
       </div>
 

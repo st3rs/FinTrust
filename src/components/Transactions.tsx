@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
-import { 
-  ArrowDownIcon, 
+import React, { useState, useEffect } from 'react';
+import {
+  ArrowDownIcon,
   ArrowUpIcon,
-  CheckCircle2, 
-  RotateCcw, 
-  AlertCircle, 
+  CheckCircle2,
+  RotateCcw,
+  AlertCircle,
   Download,
   Filter,
   Search,
@@ -17,28 +17,57 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-
-const mockTransactions = [
-  { id: 'tx_3MtwBwLkdIwHu7ix28a3tqA1', type: 'payment', amount: 450.00, currency: 'USD', status: 'succeeded', customer: 'Acme Corp', method: 'card', gateway: 'stripe', date: '2026-05-30T04:20:00Z', fee: 13.35, net: 436.65 },
-  { id: 'tx_3MtwBwLkdIwHu7ix28a3tqA2', type: 'payment', amount: 1250.00, currency: 'USD', status: 'pending', customer: 'Global Tech', method: 'promptpay', gateway: 'promptpay', date: '2026-05-29T14:15:00Z', fee: 0, net: 1250.00 },
-  { id: 'tx_3MtwBwLkdIwHu7ix28a3tqA3', type: 'payment', amount: 85.00, currency: 'USD', status: 'failed', customer: 'StartUp Inc', method: 'crypto', gateway: 'crypto', date: '2026-05-28T09:30:00Z', fee: 0, net: 0 },
-  { id: 'tx_3MtwBwLkdIwHu7ix28a3tqA4', type: 'payment', amount: 3400.00, currency: 'USD', status: 'succeeded', customer: 'Nexus Industries', method: 'card', gateway: 'paypal', date: '2026-05-27T16:45:00Z', fee: 102.30, net: 3297.70 },
-  { id: 'tx_3MtwBwLkdIwHu7ix28a3tqA5', type: 'refund', amount: -150.00, currency: 'USD', status: 'refunded', customer: 'Wayne Corp', method: 'card', gateway: 'stripe', date: '2026-05-26T11:20:00Z', fee: -4.65, net: -145.35 },
-  { id: 'tx_3MtwBwLkdIwHu7ix28a3tqA6', type: 'payment', amount: 2100.00, currency: 'USD', status: 'succeeded', customer: 'Stark Enterprises', method: 'usdt', gateway: 'crypto', date: '2026-05-25T10:05:00Z', fee: 1.00, net: 2099.00 },
-  { id: 'tx_3MtwBwLkdIwHu7ix28a3tqA7', type: 'payment', amount: 45.00, currency: 'USD', status: 'succeeded', customer: 'Jane Doe', method: 'card', gateway: 'stripe', date: '2026-05-24T18:30:00Z', fee: 1.61, net: 43.39 },
-];
+import { PaginationControls } from '@/components/ui/pagination-controls';
+import { usePagination } from '@/src/lib/use-pagination';
+import { supabase } from '../lib/supabase';
+import { useAuth } from '../lib/auth-context';
 
 export default function Transactions() {
+  const { user } = useAuth();
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const pagination = usePagination(20);
 
-  const filtered = mockTransactions.filter(tx => {
-    if (statusFilter !== 'ALL' && tx.status !== statusFilter) return false;
-    if (searchTerm) {
-      const term = searchTerm.toLowerCase();
-      return tx.id.toLowerCase().includes(term) || tx.customer.toLowerCase().includes(term);
-    }
-    return true;
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    setIsLoading(true);
+
+    (async () => {
+      let query = supabase
+        .from('transactions')
+        .select('*', { count: 'exact' })
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .range(pagination.offset, pagination.offset + pagination.limit - 1);
+
+      if (statusFilter !== 'ALL') {
+        query = query.eq('status', statusFilter);
+      }
+
+      const { data, count, error } = await query;
+      if (!active) return;
+      if (!error && data) {
+        setTransactions(data);
+        setTotal(count ?? 0);
+      }
+      setIsLoading(false);
+    })();
+
+    return () => { active = false; };
+  }, [user, pagination.page, pagination.limit, statusFilter]);
+
+  // Client-side search within the current page
+  const filtered = transactions.filter(tx => {
+    if (!searchTerm) return true;
+    const term = searchTerm.toLowerCase();
+    return (
+      (tx.id ?? '').toLowerCase().includes(term) ||
+      (tx.client ?? tx.customer ?? '').toLowerCase().includes(term)
+    );
   });
 
   return (
@@ -172,6 +201,14 @@ export default function Transactions() {
               )}
             </TableBody>
           </Table>
+        </div>
+        <div className="px-4 sm:px-6 border-t">
+          <PaginationControls
+            page={pagination.page}
+            total={total}
+            limit={pagination.limit}
+            onPage={pagination.goTo}
+          />
         </div>
       </Card>
     </div>

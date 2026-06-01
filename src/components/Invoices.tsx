@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Download, Search, PlusCircle } from 'lucide-react';
+import { PaginationControls } from '@/components/ui/pagination-controls';
+import { usePagination } from '@/src/lib/use-pagination';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -14,32 +16,31 @@ import autoTable from 'jspdf-autotable';
 export default function Invoices() {
   const { user } = useAuth();
   const [invoices, setInvoices] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const pagination = usePagination(20);
 
   useEffect(() => {
-    if (user) {
-      fetchInvoices();
-    }
-  }, [user]);
+    if (user) fetchInvoices();
+  }, [user, pagination.page]);
 
   async function fetchInvoices() {
     if (!user) return;
     try {
       setIsLoading(true);
-      const { data, error } = await supabase
+      const { data, error, count } = await supabase
         .from('invoices')
-        .select('*')
+        .select('*', { count: 'exact' })
         .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .range(pagination.offset, pagination.offset + pagination.limit - 1);
 
-      if (error) {
-        throw error;
-      }
-
+      if (error) throw error;
       if (data) {
         setInvoices(data);
+        setTotal(count ?? 0);
       }
     } catch (error) {
       console.error('Error fetching invoices:', error);
@@ -216,6 +217,14 @@ export default function Invoices() {
               )}
             </TableBody>
           </Table>
+          <div className="px-4 sm:px-6 border-t">
+            <PaginationControls
+              page={pagination.page}
+              total={total}
+              limit={pagination.limit}
+              onPage={pagination.goTo}
+            />
+          </div>
         </div>
       </div>
     </div>
