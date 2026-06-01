@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User, Session, AuthError } from '@supabase/supabase-js';
 import { supabase } from './supabase';
+import { getPlan, type PlanId, type Plan } from './plans';
 
 interface AuthContextType {
   user: User | null;
@@ -13,6 +14,8 @@ interface AuthContextType {
   lastName: string;
   signOut: () => Promise<void>;
   trialDaysLeft: number | null;
+  plan: Plan;
+  planId: PlanId;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -24,7 +27,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [companyName, setCompanyName] = useState('FinTrust Corp.');
   const [firstName, setFirstName] = useState('John');
   const [lastName, setLastName] = useState('Doe');
-  const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(7);
+  const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(null);
+  const [planId, setPlanId] = useState<PlanId>('free');
 
   useEffect(() => {
     // 1. Get initial session
@@ -72,7 +76,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const metaCompany = meta.company_name || meta.company || '';
     const metaFirst = meta.first_name || meta.firstName || '';
     const metaLast = meta.last_name || meta.lastName || '';
-    
+
     if (metaCompany) {
       setCompanyName(metaCompany);
       localStorage.setItem('companyName', metaCompany);
@@ -84,15 +88,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (metaFirst) setFirstName(metaFirst);
     if (metaLast) setLastName(metaLast);
 
-    // Calculate trial days left
-    const createdAt = new Date(currentUser.created_at);
-    const now = new Date();
-    const diff = createdAt.getTime() + 7 * 24 * 60 * 60 * 1000 - now.getTime();
-    if (diff > 0) {
-      setTrialDaysLeft(Math.ceil(diff / (1000 * 60 * 60 * 24)));
-    } else {
-      setTrialDaysLeft(0);
-    }
+    // Plan — defaults to 'free' for all new accounts
+    const rawPlan = (meta.plan as PlanId) ?? 'free';
+    setPlanId(rawPlan === 'pro' ? 'pro' : 'free');
+
+    // trialDaysLeft kept for display only, no enforcement (freemium replaces trial)
+    setTrialDaysLeft(null);
   };
 
   const setCompanyNameState = (name: string) => {
@@ -148,7 +149,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       firstName,
       lastName,
       signOut,
-      trialDaysLeft
+      trialDaysLeft,
+      plan: getPlan(planId),
+      planId,
     }}>
       {children}
     </AuthContext.Provider>

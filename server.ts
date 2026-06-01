@@ -316,7 +316,17 @@ async function startServer() {
 
       if (event.type === "checkout.session.completed") {
         const session = event.data.object as Stripe.Checkout.Session;
-        const { invoiceId, userId } = session.metadata ?? {};
+        const { invoiceId, userId, upgradeTo } = session.metadata ?? {};
+
+        // ── Plan upgrade (subscription mode) ──────────────────────────────
+        if (upgradeTo === "pro" && userId) {
+          await supabaseAdmin.auth.admin.updateUserById(userId, {
+            user_metadata: { plan: "pro" },
+          });
+          addLog("system", `Account upgraded to Pro: ${userId}`);
+        }
+
+        // ── Invoice payment (payment mode) ────────────────────────────────
         if (invoiceId && userId) {
           await supabaseAdmin
             .from("invoices")
@@ -394,6 +404,16 @@ async function startServer() {
       .select("*")
       .eq("id", invoiceId)
       .maybeSingle();
+
+    // Check operator's plan — Stripe requires Pro
+    if (inv?.user_id) {
+      const { data: operatorData } = await supabaseAdmin.auth.admin.getUserById(inv.user_id);
+      const plan = (operatorData?.user?.user_metadata?.plan as string) ?? "free";
+      if (plan !== "pro") {
+        res.status(403).json({ error: "Card payments require a Pro plan.", code: "PLAN_LIMIT_REACHED", upgradeRequired: true });
+        return;
+      }
+    }
 
     if (!inv) { res.status(404).json({ error: "Invoice not found" }); return; }
     if (inv.status === "PAID") { res.status(409).json({ error: "Invoice already paid" }); return; }
@@ -623,9 +643,62 @@ async function startServer() {
     res.json({ data });
   });
 
+  api.get("/plan/usage", async (req, res) => {
+    const { userId } = req as AuthenticatedRequest;
+
+    // Get plan from Supabase user metadata
+    const { data: userData } = await supabaseAdmin.auth.admin.getUserById(userId);
+    const planId: string = (userData?.user?.user_metadata?.plan as string) ?? "free";
+    const limit = planId === "pro" ? null : 5; // null = unlimited
+
+    // Count invoices created this calendar month
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+
+    const { count } = await supabaseAdmin
+      .from("invoices")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .gte("created_at", startOfMonth.toISOString());
+
+    res.json({
+      planId,
+      invoicesThisMonth: count ?? 0,
+      invoiceLimit: limit,
+      canCreateInvoice: limit === null || (count ?? 0) < limit,
+    });
+  });
+
   api.post("/invoices", async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
     const body = req.body;
+
+    // ── Freemium gate: enforce invoice limit for free accounts ────────────
+    const { data: userData } = await supabaseAdmin.auth.admin.getUserById(userId);
+    const planId: string = (userData?.user?.user_metadata?.plan as string) ?? "free";
+
+    if (planId !== "pro") {
+      const startOfMonth = new Date();
+      startOfMonth.setDate(1);
+      startOfMonth.setHours(0, 0, 0, 0);
+
+      const { count } = await supabaseAdmin
+        .from("invoices")
+        .select("*", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .gte("created_at", startOfMonth.toISOString());
+
+      if ((count ?? 0) >= 5) {
+        res.status(403).json({
+          error: "Invoice limit reached",
+          code: "PLAN_LIMIT_REACHED",
+          message: "Free plan allows 5 invoices per month. Upgrade to Pro for unlimited invoices.",
+          upgradeRequired: true,
+        });
+        return;
+      }
+    }
 
     const newInvoice = {
       id: randomUUID(),
@@ -904,6 +977,32 @@ async function startServer() {
     }
     res.status(201).json({ data });
   });
+
+  // ── Plan upgrade via Stripe Subscription ─────────────────────────────────
+  api.post("/plan/upgrade", async (req, res) => {
+    if (!process.env.STRIPE_SECRET_KEY || !process.env.STRIPE_PRO_PRICE_ID) {
+      res.status(503).json({ error: "Billing not configured. Contact support to upgrade." });
+      return;
+    }
+    const { userId } = req as unknown as AuthenticatedRequest;
+    const { data: userData } = await supabaseAdmin.auth.admin.getUserById(userId);
+    const email = userData?.user?.email;
+
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      payment_method_types: ["card"],
+      line_items: [{ price: process.env.STRIPE_PRO_PRICE_ID, quantity: 1 }],
+      customer_email: email ?? undefined,
+      success_url: `${process.env.APP_URL}/settings?upgrade=success`,
+      cancel_url: `${process.env.APP_URL}/settings?upgrade=cancelled`,
+      metadata: { userId, upgradeTo: "pro" },
+    });
+    res.json({ url: session.url });
+  });
+
+  // Stripe webhook also handles customer.subscription.created → set plan=pro
+  // (already handled in the webhook route above via checkout.session.completed)
 
   // Mount protected router
   app.use("/api", api);

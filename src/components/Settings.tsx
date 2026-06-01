@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { generatePromptPayQRBase64 } from '../lib/promptpay';
+import { PLANS } from '../lib/plans';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { useLanguage } from './language-provider';
 import { useAuth } from '../lib/auth-context';
@@ -87,7 +89,11 @@ export default function Settings() {
   const [companyLogo, setCompanyLogo] = useState(user?.user_metadata?.company_logo || localStorage.getItem('companyLogo') || '');
   const [saveSuccess, setSaveSuccess] = useState('');
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus | null>(null);
+  const [usage, setUsage] = useState<{ invoicesThisMonth: number; invoiceLimit: number | null; canCreateInvoice: boolean } | null>(null);
+  const [upgradeLoading, setUpgradeLoading] = useState(false);
+  const [searchParams] = useSearchParams();
   const { language: lang, setLanguage: changeLanguage } = useLanguage();
+  const { plan: currentPlan, planId, session } = useAuth();
 
   const t = translations[lang];
 
@@ -99,13 +105,42 @@ export default function Settings() {
     }
   }, []);
 
-  // Fetch real gateway connection status from server
   useEffect(() => {
-    fetch('/api/gateways/status')
-      .then((r) => r.json())
-      .then(setGatewayStatus)
-      .catch(() => {});
+    fetch('/api/gateways/status').then(r => r.json()).then(setGatewayStatus).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!session?.access_token) return;
+    fetch('/api/plan/usage', { headers: { Authorization: `Bearer ${session.access_token}` } })
+      .then(r => r.json()).then(setUsage).catch(() => {});
+  }, [session]);
+
+  // Handle ?upgrade=success redirect from Stripe
+  useEffect(() => {
+    if (searchParams.get('upgrade') === 'success') {
+      setSaveSuccess('Your account has been upgraded to Pro!');
+      setTimeout(() => setSaveSuccess(''), 5000);
+    }
+  }, [searchParams]);
+
+  const handleUpgrade = async () => {
+    if (!session?.access_token) return;
+    setUpgradeLoading(true);
+    try {
+      const res = await fetch('/api/plan/upgrade', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        alert(data.error ?? 'Upgrade unavailable. Contact support.');
+      }
+    } finally {
+      setUpgradeLoading(false);
+    }
+  };
 
   const handleSaveCompany = async () => {
     try {
@@ -295,6 +330,100 @@ export default function Settings() {
               {t.saveCompanyDetails}
             </button>
           </div>
+        </div>
+      </div>
+
+      {/* ── Billing / Plan section ─────────────────────────────────────────── */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm shadow-slate-200/50 p-6 mb-8">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5">
+          <div>
+            <h2 className="font-bold text-lg leading-tight">Plan &amp; Billing</h2>
+            <p className="text-sm text-slate-500">Manage your subscription and usage.</p>
+          </div>
+          <span className={`text-xs font-bold px-3 py-1 rounded-full self-start ${currentPlan.badge.class}`}>
+            {currentPlan.name}
+          </span>
+        </div>
+
+        {saveSuccess && (
+          <div className="mb-4 bg-emerald-50 text-emerald-700 border border-emerald-200 text-sm p-3 rounded-lg">
+            ✓ {saveSuccess}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          {/* Current usage */}
+          <div className="bg-slate-50 rounded-lg p-4 space-y-3">
+            <p className="text-xs font-semibold text-slate-700">This month's usage</p>
+            <div>
+              <div className="flex justify-between text-sm mb-1">
+                <span className="text-slate-600">Invoices</span>
+                <span className="font-semibold tabular-nums">
+                  {usage?.invoicesThisMonth ?? '—'}
+                  {usage?.invoiceLimit ? ` / ${usage.invoiceLimit}` : ' / ∞'}
+                </span>
+              </div>
+              {usage?.invoiceLimit && (
+                <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      (usage.invoicesThisMonth / usage.invoiceLimit) >= 1
+                        ? 'bg-red-500'
+                        : (usage.invoicesThisMonth / usage.invoiceLimit) >= 0.7
+                        ? 'bg-amber-500'
+                        : 'bg-primary'
+                    }`}
+                    style={{ width: `${Math.min((usage.invoicesThisMonth / usage.invoiceLimit) * 100, 100)}%` }}
+                  />
+                </div>
+              )}
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-slate-600">Payment gateways</span>
+              <span className="font-semibold">{currentPlan.gateways.length} active</span>
+            </div>
+          </div>
+
+          {/* Plan comparison / upgrade */}
+          {planId === 'free' ? (
+            <div className="border border-primary/30 rounded-lg p-4 bg-primary/5 space-y-3">
+              <p className="text-xs font-semibold text-primary">Upgrade to Pro</p>
+              <ul className="text-xs text-slate-700 dark:text-slate-300 space-y-1.5">
+                {[
+                  'Unlimited invoices',
+                  'Stripe card payments',
+                  'PayPal global payments',
+                  'Webhooks &amp; API access',
+                  'Analytics dashboard',
+                ].map(f => (
+                  <li key={f} className="flex items-center gap-1.5">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-primary shrink-0"><polyline points="20 6 9 17 4 12"/></svg>
+                    <span dangerouslySetInnerHTML={{ __html: f }} />
+                  </li>
+                ))}
+              </ul>
+              <button
+                onClick={handleUpgrade}
+                disabled={upgradeLoading}
+                className="w-full bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2 rounded-lg text-sm font-semibold transition-colors disabled:opacity-60"
+              >
+                {upgradeLoading ? 'Redirecting…' : 'Upgrade — ฿499/month'}
+              </button>
+            </div>
+          ) : (
+            <div className="border border-emerald-200 rounded-lg p-4 bg-emerald-50/50 space-y-3">
+              <p className="text-xs font-semibold text-emerald-700">Pro Plan Active</p>
+              <ul className="text-xs text-slate-700 space-y-1.5">
+                {['Unlimited invoices', 'All payment gateways', 'Webhooks &amp; API', 'Analytics'].map(f => (
+                  <li key={f} className="flex items-center gap-1.5">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-emerald-600 shrink-0"><polyline points="20 6 9 17 4 12"/></svg>
+                    <span dangerouslySetInnerHTML={{ __html: f }} />
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-slate-500">Manage billing via the Stripe customer portal.</p>
+            </div>
+          )}
         </div>
       </div>
 

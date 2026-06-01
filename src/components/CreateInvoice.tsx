@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth-context';
@@ -23,8 +23,20 @@ import {
 
 export default function CreateInvoice() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, session } = useAuth();
   const [step, setStep] = useState(1);
+  const [planError, setPlanError] = useState<string | null>(null);
+
+  // Pre-check usage so we can show a warning before the user fills the form
+  useEffect(() => {
+    if (!session?.access_token) return;
+    fetch('/api/plan/usage', { headers: { Authorization: `Bearer ${session.access_token}` } })
+      .then(r => r.json())
+      .then(d => {
+        if (!d.canCreateInvoice) setPlanError(`You've used ${d.invoicesThisMonth}/${d.invoiceLimit} invoices this month. Upgrade to Pro for unlimited invoices.`);
+      })
+      .catch(() => {});
+  }, [session]);
   const [items, setItems] = useState([{ description: '', quantity: 1, price: 0 }]);
   const [loading, setLoading] = useState(false);
 

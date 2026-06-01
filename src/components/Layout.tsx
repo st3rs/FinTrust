@@ -94,7 +94,7 @@ export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { language } = useLanguage();
-  const { user, companyName, firstName, lastName, signOut, trialDaysLeft: realTrialDaysLeft } = useAuth();
+  const { user, companyName, firstName, lastName, signOut, trialDaysLeft: realTrialDaysLeft, plan, planId } = useAuth();
   const t = translations[language] || translations.en;
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -170,15 +170,38 @@ export default function Layout() {
 
         <div className="mt-auto p-6 space-y-6">
           <div className="w-full h-px bg-slate-200 dark:bg-slate-800"></div>
-          <p className="text-[10px] text-slate-400 dark:text-slate-600 text-center tracking-wide select-none">
-            Powered by <span className="font-semibold text-slate-500 dark:text-slate-500">TRST I Fin</span>
-          </p>
-          <Button 
-            className="w-full shadow-sm flex items-center gap-2 h-9 rounded-md transition-all" 
-            onClick={() => {
-              closeSidebar();
-              navigate('/invoice/new');
-            }}
+
+          {/* Plan badge + upgrade CTA */}
+          {planId === 'free' ? (
+            <div className="rounded-lg border border-dashed border-primary/30 bg-primary/5 p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">Free Plan</span>
+                <span className="text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-500 px-1.5 py-0.5 rounded">5 inv/mo</span>
+              </div>
+              <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight">
+                Upgrade for Stripe, PayPal &amp; unlimited invoices.
+              </p>
+              <button
+                onClick={() => { closeSidebar(); navigate('/settings?tab=billing'); }}
+                className="w-full bg-primary text-primary-foreground text-xs font-semibold py-1.5 rounded-md hover:bg-primary/90 transition-colors"
+              >
+                Upgrade to Pro ฿499/mo
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between px-1">
+              <span className="text-[10px] text-slate-400 dark:text-slate-600 select-none">
+                Powered by <span className="font-semibold text-slate-500">TRST I Fin</span>
+              </span>
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${plan.badge.class}`}>
+                {plan.badge.label}
+              </span>
+            </div>
+          )}
+
+          <Button
+            className="w-full shadow-sm flex items-center gap-2 h-9 rounded-md transition-all"
+            onClick={() => { closeSidebar(); navigate('/invoice/new'); }}
           >
             <Plus className="w-4 h-4" />
             {t.createInvoice}
