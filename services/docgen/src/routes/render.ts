@@ -29,7 +29,7 @@ router.post("/", async (req, res) => {
   }
 
   const { templateId, data, format, options } = parsed.data;
-  const { accountId } = req as AuthenticatedRequest;
+  const { accountId } = req as unknown as AuthenticatedRequest;
 
   // ── Load template body ────────────────────────────────────────────────────
   let templateBody: string;

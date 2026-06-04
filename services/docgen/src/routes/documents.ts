@@ -7,7 +7,7 @@ const router = Router();
 
 // GET /v1/documents/:id — returns metadata + fresh signed URL (1h expiry)
 router.get("/:id", async (req, res) => {
-  const { accountId } = req as AuthenticatedRequest;
+  const { accountId } = req as unknown as AuthenticatedRequest;
   const { id } = req.params;
 
   const { data, error } = await supabase
