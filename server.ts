@@ -7,7 +7,7 @@ import { randomUUID } from "crypto";
 import Stripe from "stripe";
 import rateLimit from "express-rate-limit";
 import { supabaseAdmin, createUserClient } from "./lib/supabase.js";
-import { requireAuth, type AuthenticatedRequest } from "./middleware/auth.js";
+import { requireAuth, requireAdmin, type AuthenticatedRequest } from "./middleware/auth.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -913,9 +913,65 @@ async function startServer() {
 
   api.post("/payment-links", async (req, res) => {
     const { userId } = req as AuthenticatedRequest;
+    const { title, amount, currency = "usd", methods = {}, description } = req.body as {
+      title: string;
+      amount: number;
+      currency?: string;
+      methods?: Record<string, boolean>;
+      description?: string;
+    };
+
+    if (!title || !amount) {
+      res.status(400).json({ error: "title and amount are required" });
+      return;
+    }
+
+    // Resolve Stripe key: prefer operator's own key, fall back to platform key
+    let stripeUrl: string | null = null;
+    if (methods?.stripe) {
+      const { data: gw } = await supabaseAdmin
+        .from("gateway_configs")
+        .select("secret_key")
+        .eq("user_id", userId)
+        .eq("gateway", "stripe")
+        .maybeSingle();
+
+      const stripeKey = gw?.secret_key ?? process.env.STRIPE_SECRET_KEY;
+
+      if (stripeKey) {
+        try {
+          const stripe = new Stripe(stripeKey);
+          const price = await stripe.prices.create({
+            currency: currency.toLowerCase(),
+            unit_amount: Math.round(Number(amount) * 100),
+            product_data: {
+              name: title,
+              ...(description ? { description } : {}),
+            },
+          });
+          const link = await stripe.paymentLinks.create({
+            line_items: [{ price: price.id, quantity: 1 }],
+          });
+          stripeUrl = link.url;
+          addLog("api_request", `Stripe Payment Link created: ${link.id}`, { userId, amount, currency });
+        } catch (err: any) {
+          res.status(502).json({ error: `Stripe error: ${err.message}` });
+          return;
+        }
+      }
+    }
+
     const { data, error } = await supabaseAdmin
       .from("payment_links")
-      .insert({ ...req.body, id: randomUUID(), user_id: userId })
+      .insert({
+        id: randomUUID(),
+        user_id: userId,
+        title,
+        amount: Number(amount),
+        reference: stripeUrl,
+        is_active: true,
+        clicks: 0,
+      })
       .select()
       .single();
 
@@ -1119,6 +1175,202 @@ async function startServer() {
 
   // Mount protected router
   app.use("/api", api);
+
+  // ---------------------------------------------------------------------------
+  // Super Admin routes — require valid JWT + ADMIN_EMAILS whitelist
+  // ---------------------------------------------------------------------------
+
+  const adminApi = express.Router();
+  adminApi.use(requireAdmin as express.RequestHandler);
+
+  // Verify admin status — used by the frontend AdminRoute guard
+  adminApi.get("/verify", (req, res) => {
+    const { userEmail } = req as AuthenticatedRequest;
+    res.json({ isAdmin: true, email: userEmail });
+  });
+
+  // Platform-wide aggregate stats
+  adminApi.get("/stats", async (_req, res) => {
+    try {
+      const { data: { users } } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+
+      const { data: transactions } = await supabaseAdmin
+        .from("transactions")
+        .select("amount, status, payment_method, created_at, user_id");
+
+      const successTxns = (transactions ?? []).filter((t) => t.status === "Success");
+      const totalRevenue = successTxns.reduce((sum, t) => sum + (t.amount ?? 0), 0);
+
+      const startOfMonth = new Date();
+      startOfMonth.setDate(1);
+      startOfMonth.setHours(0, 0, 0, 0);
+      const monthlyTxns = successTxns.filter((t) => new Date(t.created_at) >= startOfMonth);
+      const monthlyRevenue = monthlyTxns.reduce((sum, t) => sum + (t.amount ?? 0), 0);
+
+      const { count: totalInvoices } = await supabaseAdmin
+        .from("invoices").select("*", { count: "exact", head: true });
+      const { count: paidInvoices } = await supabaseAdmin
+        .from("invoices").select("*", { count: "exact", head: true }).eq("status", "PAID");
+
+      const activeMerchantIds = new Set(successTxns.map((t) => t.user_id).filter(Boolean));
+
+      // Gateway distribution
+      const gatewayBreakdown = successTxns.reduce<Record<string, number>>((acc, t) => {
+        const gw = t.payment_method ?? "Unknown";
+        acc[gw] = (acc[gw] ?? 0) + (t.amount ?? 0);
+        return acc;
+      }, {});
+
+      res.json({
+        totalMerchants: users.length,
+        activeMerchants: activeMerchantIds.size,
+        totalRevenue,
+        monthlyRevenue,
+        totalTransactions: successTxns.length,
+        totalInvoices: totalInvoices ?? 0,
+        paidInvoices: paidInvoices ?? 0,
+        gatewayBreakdown,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // All merchants with per-user stats
+  adminApi.get("/merchants", async (_req, res) => {
+    try {
+      const { data: { users } } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+
+      const { data: invoiceRows } = await supabaseAdmin
+        .from("invoices").select("user_id, amount, status");
+
+      const stats = new Map<string, { totalBilled: number; invoiceCount: number; paidCount: number }>();
+      for (const inv of invoiceRows ?? []) {
+        const s = stats.get(inv.user_id) ?? { totalBilled: 0, invoiceCount: 0, paidCount: 0 };
+        s.invoiceCount++;
+        if (inv.status === "PAID") { s.paidCount++; s.totalBilled += inv.amount ?? 0; }
+        stats.set(inv.user_id, s);
+      }
+
+      const adminEmails = (process.env.ADMIN_EMAILS ?? "").split(",").map((e) => e.trim());
+
+      const merchants = users.map((u) => ({
+        id: u.id,
+        email: u.email ?? "",
+        companyName: (u.user_metadata?.company_name as string) ?? "",
+        plan: (u.user_metadata?.plan as string) ?? "free",
+        isSuspended: u.banned_until != null && new Date(u.banned_until) > new Date(),
+        isAdmin: adminEmails.includes(u.email ?? ""),
+        createdAt: u.created_at,
+        lastSignIn: u.last_sign_in_at ?? null,
+        ...(stats.get(u.id) ?? { totalBilled: 0, invoiceCount: 0, paidCount: 0 }),
+      }));
+
+      res.json({ data: merchants, total: merchants.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Cross-merchant transactions (paginated)
+  adminApi.get("/transactions", async (req, res) => {
+    const { limit, offset } = getPagination(req.query);
+    try {
+      const { data, error, count } = await supabaseAdmin
+        .from("transactions")
+        .select("*", { count: "exact" })
+        .order("created_at", { ascending: false })
+        .range(offset, offset + limit - 1);
+
+      if (error) { res.status(500).json({ error: error.message }); return; }
+      res.json({ data, total: count ?? 0, limit, offset });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Gateway health summary
+  adminApi.get("/gateways", async (_req, res) => {
+    const { data: configs } = await supabaseAdmin
+      .from("gateway_configs").select("gateway, user_id, environment, updated_at");
+
+    const byGateway = (configs ?? []).reduce<Record<string, { count: number; env: string; updatedAt: string }>>((acc, c) => {
+      if (!acc[c.gateway]) acc[c.gateway] = { count: 0, env: c.environment ?? "live", updatedAt: c.updated_at };
+      acc[c.gateway].count++;
+      return acc;
+    }, {});
+
+    res.json({
+      gateways: [
+        {
+          id: "stripe", name: "Stripe",
+          status: process.env.STRIPE_SECRET_KEY ? "active" : "not_configured",
+          merchantCount: byGateway["stripe"]?.count ?? 0,
+          environment: byGateway["stripe"]?.env ?? null,
+        },
+        {
+          id: "paypal", name: "PayPal",
+          status: process.env.PAYPAL_CLIENT_ID ? "active" : "not_configured",
+          merchantCount: byGateway["paypal"]?.count ?? 0,
+          environment: "live",
+        },
+        {
+          id: "promptpay", name: "PromptPay",
+          status: "active", merchantCount: 0, environment: "production",
+        },
+        {
+          id: "crypto", name: "Crypto Pay",
+          status: "development", merchantCount: 0, environment: null,
+        },
+      ],
+      sseClients: sseClients.size,
+      recentLogCount: recentLogs.length,
+    });
+  });
+
+  // Set merchant plan (upgrade / downgrade)
+  adminApi.patch("/merchants/:userId/plan", async (req, res) => {
+    const { userId: adminId } = req as unknown as AuthenticatedRequest;
+    const { userId } = req.params;
+    const { plan } = req.body as { plan: "free" | "pro" };
+
+    if (!["free", "pro"].includes(plan)) {
+      res.status(400).json({ error: "plan must be 'free' or 'pro'" });
+      return;
+    }
+
+    try {
+      await supabaseAdmin.auth.admin.updateUserById(userId, { user_metadata: { plan } });
+      addLog("system", `Admin ${adminId} set plan=${plan} for ${userId}`);
+      res.json({ success: true, userId, plan });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Suspend / unsuspend a merchant
+  adminApi.patch("/merchants/:userId/status", async (req, res) => {
+    const { userId: adminId } = req as unknown as AuthenticatedRequest;
+    const { userId } = req.params;
+    const { action } = req.body as { action: "suspend" | "unsuspend" };
+
+    if (!["suspend", "unsuspend"].includes(action)) {
+      res.status(400).json({ error: "action must be 'suspend' or 'unsuspend'" });
+      return;
+    }
+
+    try {
+      await supabaseAdmin.auth.admin.updateUserById(userId, {
+        ban_duration: action === "suspend" ? "876000h" : "none",
+      });
+      addLog("system", `Admin ${adminId} ${action}ed merchant ${userId}`);
+      res.json({ success: true, userId, action });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.use("/api/admin", adminApi);
 
   // ---------------------------------------------------------------------------
   // Static / Vite middleware

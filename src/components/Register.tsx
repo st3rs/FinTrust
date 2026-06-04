@@ -59,7 +59,7 @@ export default function Register() {
     } catch (err: any) {
       console.error('Registration error:', err);
       if (err?.message === 'Failed to fetch') {
-        setError('Connection failed. Please ensure your Supabase URL (VITE_SUPABASE_URL) and Anon Key (VITE_SUPABASE_ANON_KEY) are configured in the Secrets panel.');
+        setError('Connection failed. Check that VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set in your .env file and the dev server is running.');
       } else {
         setError(err?.message || 'Could not complete registration. Please try again.');
       }

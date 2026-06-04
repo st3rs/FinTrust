@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Plus, 
-  Search, 
-  Filter, 
-  MoreHorizontal, 
-  Copy, 
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  Plus,
+  Search,
+  Filter,
+  MoreHorizontal,
+  Copy,
   ExternalLink,
   QrCode,
   Download,
@@ -20,7 +20,8 @@ import {
   Activity,
   History,
   FileText,
-  Save
+  Save,
+  AlertTriangle
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -36,24 +37,34 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import generatePayload from 'promptpay-qr';
 import QRCode from 'qrcode';
 import jsPDF from 'jspdf';
+import { useAuth } from '../lib/auth-context';
 
-const mockRequests = [
-  { id: 'req_pp_9A2bK', reference: 'REF-2026-001', customer: 'Anon. Customer', amount: 450.00, type: 'Dynamic', status: 'Paid', createdAt: '2026-05-30T04:20:00Z', expiresAt: '2026-05-30T04:35:00Z', paidAt: '2026-05-30T04:22:15Z' },
-  { id: 'req_pp_3mX8C', reference: 'ORDER-9921', customer: 'Jane Smith', amount: 1250.00, type: 'Dynamic', status: 'Pending', createdAt: '2026-05-30T05:40:00Z', expiresAt: '2026-05-30T05:55:00Z', paidAt: null },
-  { id: 'req_pp_7Jp1L', reference: 'DONATION-STATIC', customer: 'Multiple', amount: 0, type: 'Static', status: 'Active', createdAt: '2026-05-01T09:00:00Z', expiresAt: null, paidAt: null },
-  { id: 'req_pp_5kR4w', reference: 'REF-2026-002', customer: 'Anon. Customer', amount: 890.00, type: 'Dynamic', status: 'Expired', createdAt: '2026-05-29T14:00:00Z', expiresAt: '2026-05-29T14:15:00Z', paidAt: null },
-  { id: 'req_pp_1nV2x', reference: 'INV-2026-045', customer: 'Global Tech', amount: 3400.00, type: 'Dynamic', status: 'Paid', createdAt: '2026-05-28T10:15:00Z', expiresAt: '2026-05-28T10:30:00Z', paidAt: '2026-05-28T10:28:45Z' },
-];
+interface QrPaymentRecord {
+  id: string;
+  reference: string;
+  promptpay_id: string;
+  amount: number;
+  qr_type: string;
+  status: string;
+  created_at: string;
+  expires_at: string | null;
+  paid_at: string | null;
+}
 
 export default function PromptPay() {
+  const { session } = useAuth();
+  const [requests, setRequests] = useState<QrPaymentRecord[]>([]);
+  const [loadingRequests, setLoadingRequests] = useState(true);
+  const [usage, setUsage] = useState<{ used: number; limit: number | null; canGenerate: boolean } | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [isGenerateModalOpen, setIsGenerateModalOpen] = useState(false);
-  const [qrType, setQrType] = useState('dynamic'); // 'dynamic' or 'static'
+  const [qrType, setQrType] = useState('dynamic');
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedQR, setGeneratedQR] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const qrPreviewRef = useRef<HTMLDivElement>(null);
 
   const [formData, setFormData] = useState({
     promptPayId: localStorage.getItem('defaultPromptPayId') || '',
@@ -65,6 +76,24 @@ export default function PromptPay() {
     isReusable: false,
     allowCustomAmount: false
   });
+
+  const authHeaders = useCallback(() => ({
+    'Authorization': `Bearer ${session?.access_token}`,
+    'Content-Type': 'application/json',
+  }), [session]);
+
+  // Load QR payment records + usage on mount / session change
+  useEffect(() => {
+    if (!session?.access_token) return;
+    setLoadingRequests(true);
+    Promise.all([
+      fetch('/api/qr-payments', { headers: authHeaders() }).then(r => r.json()),
+      fetch('/api/qr-payments/usage', { headers: authHeaders() }).then(r => r.json()),
+    ]).then(([qrData, usageData]) => {
+      setRequests(qrData.data ?? []);
+      setUsage(usageData);
+    }).catch(console.error).finally(() => setLoadingRequests(false));
+  }, [session, authHeaders]);
 
   // ─── Live QR preview ──────────────────────────────────────────────────────
   // Generate QR automatically whenever the PromptPay ID or amount changes,
@@ -109,11 +138,11 @@ export default function PromptPay() {
     };
   }, [formData.promptPayId, formData.amount, formData.allowCustomAmount, qrType]);
 
-  const filteredRequests = mockRequests.filter(req => {
+  const filteredRequests = requests.filter(req => {
     if (statusFilter !== 'ALL' && req.status !== statusFilter) return false;
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
-      return req.reference.toLowerCase().includes(term) || req.id.toLowerCase().includes(term) || req.customer.toLowerCase().includes(term);
+      return req.reference.toLowerCase().includes(term) || req.id.toLowerCase().includes(term);
     }
     return true;
   });
@@ -149,58 +178,107 @@ export default function PromptPay() {
     setError(null);
     setSuccessMessage(null);
 
-    // Basic validation
     if (!formData.promptPayId) {
-      const err = 'กรุณาระบุหมายเลขพร้อมเพย์'; // Please specify PromptPay ID
-      setError(err);
-      console.error('Validation Error:', err);
+      setError('กรุณาระบุหมายเลขพร้อมเพย์');
       return;
     }
-    
     if (formData.promptPayId.length !== 10 && formData.promptPayId.length !== 13) {
-      const err = 'หมายเลขพร้อมเพย์ต้องเป็น 10 หรือ 13 หลักเท่านั้น';
-      setError(err);
-      console.error('Validation Error:', err);
+      setError('หมายเลขพร้อมเพย์ต้องเป็น 10 หรือ 13 หลักเท่านั้น');
       return;
     }
-
     if (qrType === 'dynamic' && !formData.amount) {
-      const err = 'Amount is required for dynamic QR';
-      setError(err);
-      console.error('Validation Error:', err);
+      setError('Amount is required for dynamic QR');
       return;
     }
-
     if (!formData.reference && qrType === 'dynamic') {
-       const err = 'Reference ID is required';
-       setError(err);
-       console.error('Validation Error:', err);
-       return;
+      setError('Reference ID is required');
+      return;
+    }
+    if (usage && !usage.canGenerate) {
+      setError(`Monthly limit reached (${usage.limit}/month on Free plan). Upgrade to Pro for unlimited QR.`);
+      return;
     }
 
     setIsGenerating(true);
-    
     try {
       const amount = formData.amount ? parseFloat(formData.amount) : 0;
       const payload = generatePayload(formData.promptPayId, { amount: amount > 0 ? amount : undefined });
-      
-      const qrDataUrl = await QRCode.toDataURL(payload, { 
-        width: 250, 
+      const qrDataUrl = await QRCode.toDataURL(payload, {
+        width: 250,
         margin: 2,
-        color: {
-          dark: '#0f172a',
-          light: '#ffffff'
-        }
+        color: { dark: '#0f172a', light: '#ffffff' },
       });
-      
       setGeneratedQR(qrDataUrl);
+
+      // Persist to API
+      if (session?.access_token) {
+        const expiresAt = formData.expiresIn !== 'never'
+          ? new Date(Date.now() + parseInt(formData.expiresIn) * 60 * 1000).toISOString()
+          : null;
+        const res = await fetch('/api/qr-payments', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({
+            promptpay_id: formData.promptPayId,
+            amount: amount > 0 ? amount : 0,
+            reference: formData.reference,
+            qr_type: qrType,
+            status: qrType === 'static' ? 'Active' : 'Pending',
+            expires_at: qrType === 'dynamic' ? expiresAt : null,
+          }),
+        });
+        const saved = await res.json();
+        if (saved.data) {
+          setRequests(prev => [saved.data, ...prev]);
+          setUsage(prev => prev ? { ...prev, used: prev.used + 1, canGenerate: prev.limit === null || prev.used + 1 < prev.limit } : prev);
+        }
+      }
+
       setSuccessMessage('PromptPay QR generated successfully.');
-      console.log('Successfully generated PromptPay QR code', { ...formData, type: qrType });
     } catch (err: any) {
       console.error('Failed to generate PromptPay QR:', err);
       setError('An error occurred while generating the QR code. Please try again.');
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const handleDownloadPng = () => {
+    if (!generatedQR) return;
+    const a = document.createElement('a');
+    a.href = generatedQR;
+    a.download = `promptpay-qr-${formData.reference || 'code'}.png`;
+    a.click();
+  };
+
+  const handlePrint = () => {
+    if (!generatedQR) return;
+    const win = window.open('', '_blank');
+    if (!win) return;
+    win.document.write(`
+      <html><head><title>PromptPay QR — ${formData.reference}</title>
+      <style>body{margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:sans-serif}
+      img{width:240px;height:240px} h3{margin:12px 0 4px} p{margin:2px 0;color:#555;font-size:13px}</style></head>
+      <body>
+        <h3>${formData.merchantName || 'FinTrust Merchant'}</h3>
+        <img src="${generatedQR}" />
+        ${formData.amount ? `<p style="font-size:20px;font-weight:700;color:#1e3a8a">฿ ${Number(formData.amount).toLocaleString(undefined,{minimumFractionDigits:2})}</p>` : '<p>Any amount</p>'}
+        <p>Ref: ${formData.reference}</p>
+      </body></html>`);
+    win.document.close();
+    win.print();
+  };
+
+  const handleRowDownloadQr = async (req: QrPaymentRecord) => {
+    try {
+      const payload = generatePayload(req.promptpay_id, { amount: req.amount > 0 ? req.amount : undefined });
+      const dataUrl = await QRCode.toDataURL(payload, { width: 400, margin: 2 });
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = `promptpay-${req.reference}.png`;
+      a.click();
+    } catch (e) {
+      console.error('Download failed', e);
     }
   };
 
@@ -221,7 +299,7 @@ export default function PromptPay() {
 
       for (let i = 0; i < filteredRequests.length; i++) {
         const req = filteredRequests[i];
-        const targetPromptPayId = formData.promptPayId || '0123456789'; // Fallback
+        const targetPromptPayId = req.promptpay_id || formData.promptPayId;
         const payload = generatePayload(targetPromptPayId, { amount: req.amount > 0 ? req.amount : undefined });
         const qrDataUrl = await QRCode.toDataURL(payload, { width: 100, margin: 1 });
 
@@ -234,10 +312,10 @@ export default function PromptPay() {
         doc.text(`Reference: ${req.reference}`, 20, yOffset);
         doc.setFontSize(10);
         doc.text(`ID: ${req.id}`, 20, yOffset + 5);
-        doc.text(`Customer: ${req.customer}`, 20, yOffset + 10);
+        doc.text(`PromptPay ID: ${req.promptpay_id}`, 20, yOffset + 10);
         doc.text(`Amount: ${req.amount > 0 ? 'THB ' + req.amount : 'Any Amount'}`, 20, yOffset + 15);
         doc.text(`Status: ${req.status}`, 20, yOffset + 20);
-        doc.text(`Type: ${req.type} QR`, 20, yOffset + 25);
+        doc.text(`Type: ${req.qr_type?.toUpperCase() ?? 'DYNAMIC'} QR`, 20, yOffset + 25);
         
         doc.addImage(qrDataUrl, 'PNG', 120, yOffset - 5, 50, 50);
         
@@ -297,33 +375,58 @@ export default function PromptPay() {
         </div>
       </div>
 
+      {/* Usage limit banner for Free plan */}
+      {usage && usage.limit !== null && (
+        <div className={`flex items-center gap-3 px-4 py-3 rounded-xl border text-sm ${
+          usage.canGenerate
+            ? 'bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-300'
+            : 'bg-red-50 border-red-200 text-red-800 dark:bg-red-900/20 dark:border-red-800 dark:text-red-300'
+        }`}>
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>
+            {usage.used}/{usage.limit} QR codes used this month on Free plan.
+            {!usage.canGenerate && ' Monthly limit reached — '}
+            {!usage.canGenerate && <a href="/settings" className="underline font-medium">Upgrade to Pro</a>}
+            {usage.canGenerate && <> — <a href="/settings" className="underline font-medium">Upgrade to Pro</a> for unlimited.</>}
+          </span>
+        </div>
+      )}
+
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <Card className="border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden group">
           <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-500/10 rounded-full blur-2xl -mr-8 -mt-8" />
           <CardContent className="p-4 sm:p-6 flex flex-col">
             <span className="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-1">Total QR Generated</span>
-            <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">1,248</span>
+            <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
+              {loadingRequests ? '—' : requests.length.toLocaleString()}
+            </span>
           </CardContent>
         </Card>
         <Card className="border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden group">
           <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/10 rounded-full blur-2xl -mr-8 -mt-8" />
           <CardContent className="p-4 sm:p-6 flex flex-col">
             <span className="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-1">Payments Received</span>
-            <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">892</span>
+            <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
+              {loadingRequests ? '—' : requests.filter(r => r.status === 'Paid').length.toLocaleString()}
+            </span>
           </CardContent>
         </Card>
         <Card className="border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden group">
           <div className="absolute top-0 right-0 w-24 h-24 bg-amber-500/10 rounded-full blur-2xl -mr-8 -mt-8" />
           <CardContent className="p-4 sm:p-6 flex flex-col">
              <span className="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-1">Pending Payments</span>
-             <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">34</span>
+             <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
+               {loadingRequests ? '—' : requests.filter(r => r.status === 'Pending').length.toLocaleString()}
+             </span>
           </CardContent>
         </Card>
         <Card className="border-slate-200 dark:border-slate-800 shadow-sm">
           <CardContent className="p-4 sm:p-6 flex flex-col">
             <span className="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-1">Revenue Collected</span>
-            <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">฿1,420,500</span>
+            <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
+              {loadingRequests ? '—' : `฿${requests.filter(r => r.status === 'Paid').reduce((s, r) => s + (r.amount || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 0 })}`}
+            </span>
           </CardContent>
         </Card>
       </div>
@@ -366,7 +469,7 @@ export default function PromptPay() {
             <TableHeader className="bg-slate-50 dark:bg-slate-900/50">
               <TableRow>
                 <TableHead className="px-6">Reference ID</TableHead>
-                <TableHead>Customer</TableHead>
+                <TableHead>PromptPay ID</TableHead>
                 <TableHead>Amount (THB)</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Created / Expires</TableHead>
@@ -393,11 +496,11 @@ export default function PromptPay() {
                     <TableCell className="px-6 py-4">
                       <div className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
                         {req.reference}
-                        {req.type === 'Static' && <Badge variant="outline" className="text-[9px] py-0 h-4 bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-900/20 dark:border-indigo-800">STATIC</Badge>}
+                        {req.qr_type === 'static' && <Badge variant="outline" className="text-[9px] py-0 h-4 bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-900/20 dark:border-indigo-800">STATIC</Badge>}
                       </div>
                       <div className="flex items-center gap-2 mt-1">
                         <span className="text-xs font-mono text-slate-500">{req.id}</span>
-                        <button 
+                        <button
                           onClick={() => handleCopyLink(req.id)}
                           className="text-slate-400 hover:text-indigo-600 transition-colors"
                           title="Copy Link URL"
@@ -407,7 +510,7 @@ export default function PromptPay() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <div className="font-medium text-slate-900 dark:text-slate-200">{req.customer}</div>
+                      <div className="font-mono text-xs text-slate-500">{req.promptpay_id}</div>
                     </TableCell>
                     <TableCell>
                       <div className="font-semibold text-slate-900 dark:text-slate-100">
@@ -422,16 +525,16 @@ export default function PromptPay() {
                     </TableCell>
                     <TableCell>
                        <div className="text-sm text-slate-700 dark:text-slate-300">
-                         {new Date(req.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                         {new Date(req.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                        </div>
-                       {req.expiresAt && req.status === 'Pending' && (
+                       {req.expires_at && req.status === 'Pending' && (
                          <div className="text-xs text-amber-600 mt-0.5 flex items-center gap-1">
-                           <Clock className="w-3 h-3" /> Expires {new Date(req.expiresAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                           <Clock className="w-3 h-3" /> Expires {new Date(req.expires_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                          </div>
                        )}
-                       {req.paidAt && (
+                       {req.paid_at && (
                          <div className="text-xs text-emerald-600 mt-0.5 flex items-center gap-1">
-                           Paid {new Date(req.paidAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                           Paid {new Date(req.paid_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                          </div>
                        )}
                     </TableCell>
@@ -448,13 +551,12 @@ export default function PromptPay() {
                               <DropdownMenuItem className="cursor-pointer" onClick={() => handleCopyLink(req.id)}>
                                 <Copy className="mr-2 w-4 h-4 text-slate-500" /> Copy Link
                               </DropdownMenuItem>
-                              <DropdownMenuItem className="cursor-pointer">
+                              <DropdownMenuItem className="cursor-pointer" onClick={() => handleRowDownloadQr(req)}>
                                 <Download className="mr-2 w-4 h-4 text-slate-500" /> Download QR
                               </DropdownMenuItem>
                             </DropdownMenuGroup>
                             <DropdownMenuSeparator />
                             <DropdownMenuGroup>
-                              <DropdownMenuItem className="cursor-pointer">View Details</DropdownMenuItem>
                               {req.status === 'Pending' && (
                                 <DropdownMenuItem className="cursor-pointer text-amber-600">Cancel Request</DropdownMenuItem>
                               )}
@@ -489,44 +591,37 @@ export default function PromptPay() {
                   <div>
                     <h3 className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
                       {req.reference}
+                      {req.qr_type === 'static' && <Badge variant="outline" className="text-[9px] py-0 h-4 bg-indigo-50 border-indigo-200 text-indigo-700">STATIC</Badge>}
                     </h3>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="text-xs font-mono text-slate-500">{req.id}</span>
-                    </div>
+                    <span className="text-xs font-mono text-slate-500">{req.id}</span>
                   </div>
                   <Badge variant="outline" className={`font-medium px-1.5 py-0 text-[10px] flex items-center gap-1 ${getStatusBadge(req.status)}`}>
                     {req.status}
                   </Badge>
                 </div>
-                
+
                 <div className="flex items-center justify-between mt-4 pb-4 border-b border-slate-100 dark:border-slate-800">
                   <div className="font-semibold text-lg text-slate-900 dark:text-slate-100">
                     {req.amount > 0 ? `฿${req.amount.toLocaleString(undefined, {minimumFractionDigits: 2})}` : 'Any Amount'}
                   </div>
-                  <div className="text-right">
-                    <div className="text-xs text-slate-500">{new Date(req.createdAt).toLocaleDateString()}</div>
-                  </div>
+                  <div className="text-xs text-slate-500">{new Date(req.created_at).toLocaleDateString()}</div>
                 </div>
-                
+
                 <div className="flex items-center justify-between mt-3">
-                  <div className="text-sm text-slate-600 dark:text-slate-400">
-                    {req.customer}
-                  </div>
-                  <div className="flex gap-2">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger render={
-                        <Button variant="outline" size="sm" className="h-8 shadow-sm">
-                          More <MoreHorizontal className="w-3 h-3 ml-1" />
-                        </Button>
-                      } />
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem className="cursor-pointer" onClick={() => handleCopyLink(req.id)}>Copy Link</DropdownMenuItem>
-                        <DropdownMenuItem className="cursor-pointer">Download QR</DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem className="cursor-pointer text-amber-600">Cancel</DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
+                  <div className="text-xs font-mono text-slate-500">{req.promptpay_id}</div>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger render={
+                      <Button variant="outline" size="sm" className="h-8 shadow-sm">
+                        More <MoreHorizontal className="w-3 h-3 ml-1" />
+                      </Button>
+                    } />
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem className="cursor-pointer" onClick={() => handleCopyLink(req.id)}>Copy Link</DropdownMenuItem>
+                      <DropdownMenuItem className="cursor-pointer" onClick={() => handleRowDownloadQr(req)}>Download QR</DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      {req.status === 'Pending' && <DropdownMenuItem className="cursor-pointer text-amber-600">Cancel</DropdownMenuItem>}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               </div>
             ))
@@ -825,10 +920,10 @@ export default function PromptPay() {
             </div>
             
             <div className="absolute bottom-6 flex gap-2">
-              <Button variant="secondary" size="sm" className="shadow-sm bg-white hover:bg-slate-50">
+              <Button variant="secondary" size="sm" className="shadow-sm bg-white hover:bg-slate-50" onClick={handleDownloadPng} disabled={!generatedQR}>
                 <Download className="w-4 h-4 mr-2" /> PNG
               </Button>
-              <Button variant="secondary" size="sm" className="shadow-sm bg-white hover:bg-slate-50">
+              <Button variant="secondary" size="sm" className="shadow-sm bg-white hover:bg-slate-50" onClick={handlePrint} disabled={!generatedQR}>
                 <Printer className="w-4 h-4 mr-2" /> Print
               </Button>
             </div>

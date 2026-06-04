@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { Terminal, Copy, Check, Play } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -221,6 +221,7 @@ const MOCK_RESPONSES: Record<string, any> = {
 };
 
 export default function ApiDocs() {
+  const reduced = useReducedMotion();
   const [apiKey, setApiKey] = useState('');
   const [selectedEndpoint, setSelectedEndpoint] = useState(ENDPOINTS[0].id);
   const [requestBody, setRequestBody] = useState(ENDPOINT_BODIES[ENDPOINTS[0].id] || '');
@@ -300,9 +301,9 @@ export default function ApiDocs() {
       <div className="flex flex-col lg:flex-row gap-8 items-start">
         {/* Left side: Docs Markdown */}
         <motion.div
-          initial={{ opacity: 0, y: 10 }}
+          initial={{ opacity: 0, y: reduced ? 0 : 10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3 }}
+          transition={{ duration: reduced ? 0.15 : 0.3 }}
           className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm shadow-slate-200/50 rounded-xl p-8 flex-1 w-full max-h-[800px] overflow-y-auto"
         >
           <div className="prose prose-slate dark:prose-invert max-w-none prose-pre:bg-slate-50 prose-pre:text-slate-900 prose-pre:border prose-pre:border-slate-200 dark:prose-pre:bg-slate-950 dark:prose-pre:border-slate-800 dark:prose-pre:text-slate-300">
@@ -312,9 +313,9 @@ export default function ApiDocs() {
 
         {/* Right side: Interactive API Tester */}
         <motion.div
-          initial={{ opacity: 0, y: 10 }}
+          initial={{ opacity: 0, y: reduced ? 0 : 10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3, delay: 0.1 }}
+          transition={{ duration: reduced ? 0.15 : 0.3, delay: reduced ? 0 : 0.1 }}
           className="w-full lg:w-[450px] xl:w-[500px] shrink-0 sticky top-8 flex flex-col gap-6"
         >
           <div className="bg-slate-900 dark:bg-black rounded-xl border border-slate-800 overflow-hidden shadow-xl shadow-slate-900/10">
@@ -397,8 +398,9 @@ export default function ApiDocs() {
             <AnimatePresence>
               {response && (
                 <motion.div
-                  initial={{ opacity: 0, height: 0 }}
+                  initial={{ opacity: 0, height: reduced ? 'auto' : 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
+                  transition={{ duration: reduced ? 0.15 : 0.3 }}
                   className="border-t border-slate-800 bg-[#0c1017]"
                 >
                   <div className="flex items-center justify-between px-4 py-2 border-b border-slate-800/50">

@@ -1,15 +1,17 @@
 import React from 'react';
-import { motion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
 import { ShieldCheck } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 export default function AuthLayout({ children, title, subtitle }: { children: React.ReactNode, title: string, subtitle?: React.ReactNode }) {
+  const reduced = useReducedMotion();
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
-        <motion.div 
-          initial={{ opacity: 0, y: -20 }}
+        <motion.div
+          initial={{ opacity: 0, y: reduced ? 0 : -20 }}
           animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: reduced ? 0.15 : 0.4 }}
           className="flex justify-center"
         >
           <div className="w-12 h-12 bg-black dark:bg-white text-white dark:text-black rounded-xl flex items-center justify-center font-bold text-2xl shadow-sm">
@@ -18,9 +20,9 @@ export default function AuthLayout({ children, title, subtitle }: { children: Re
         </motion.div>
         
         <motion.div
-           initial={{ opacity: 0 }}
-           animate={{ opacity: 1 }}
-           transition={{ delay: 0.1 }}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.3, delay: reduced ? 0 : 0.1 }}
         >
           <h2 className="mt-6 text-center text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
             {title}
@@ -31,10 +33,10 @@ export default function AuthLayout({ children, title, subtitle }: { children: Re
         </motion.div>
       </div>
 
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
+      <motion.div
+        initial={{ opacity: 0, y: reduced ? 0 : 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
+        transition={{ duration: reduced ? 0.15 : 0.4, delay: reduced ? 0 : 0.2 }}
         className="mt-8 sm:mx-auto sm:w-full sm:max-w-md"
       >
         <div className="bg-white dark:bg-slate-900 py-8 px-4 shadow sm:rounded-xl sm:px-10 border border-slate-200 dark:border-slate-800">

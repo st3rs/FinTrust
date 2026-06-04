@@ -16,7 +16,7 @@ import { randomUUID } from "crypto";
 import Stripe from "stripe";
 import rateLimit from "express-rate-limit";
 import { supabaseAdmin } from "../lib/supabase.js";
-import { requireAuth, type AuthenticatedRequest } from "../middleware/auth.js";
+import { requireAuth, requireAdmin, type AuthenticatedRequest } from "../middleware/auth.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -475,6 +475,109 @@ api.post("/plan/upgrade", async (req, res) => {
 });
 
 app.use("/api", api);
+
+// ─── Super Admin routes ───────────────────────────────────────────────────────
+
+const adminApi = express.Router();
+adminApi.use(requireAdmin as express.RequestHandler);
+
+adminApi.get("/verify", (req, res) => {
+  const { userEmail } = req as AuthenticatedRequest;
+  res.json({ isAdmin: true, email: userEmail });
+});
+
+adminApi.get("/stats", async (_req, res) => {
+  try {
+    const { data: { users } } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+    const { data: transactions } = await supabaseAdmin.from("transactions").select("amount, status, payment_method, created_at, user_id");
+    const successTxns = (transactions ?? []).filter((t) => t.status === "Success");
+    const totalRevenue = successTxns.reduce((sum, t) => sum + (t.amount ?? 0), 0);
+    const startOfMonth = new Date(); startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0);
+    const monthlyRevenue = successTxns.filter((t) => new Date(t.created_at) >= startOfMonth).reduce((sum, t) => sum + (t.amount ?? 0), 0);
+    const { count: totalInvoices } = await supabaseAdmin.from("invoices").select("*", { count: "exact", head: true });
+    const { count: paidInvoices } = await supabaseAdmin.from("invoices").select("*", { count: "exact", head: true }).eq("status", "PAID");
+    const activeMerchantIds = new Set(successTxns.map((t) => t.user_id).filter(Boolean));
+    const gatewayBreakdown = successTxns.reduce<Record<string, number>>((acc, t) => {
+      const gw = t.payment_method ?? "Unknown"; acc[gw] = (acc[gw] ?? 0) + (t.amount ?? 0); return acc;
+    }, {});
+    res.json({ totalMerchants: users.length, activeMerchants: activeMerchantIds.size, totalRevenue, monthlyRevenue, totalTransactions: successTxns.length, totalInvoices: totalInvoices ?? 0, paidInvoices: paidInvoices ?? 0, gatewayBreakdown });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+adminApi.get("/merchants", async (_req, res) => {
+  try {
+    const { data: { users } } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+    const { data: invoiceRows } = await supabaseAdmin.from("invoices").select("user_id, amount, status");
+    const stats = new Map<string, { totalBilled: number; invoiceCount: number; paidCount: number }>();
+    for (const inv of invoiceRows ?? []) {
+      const s = stats.get(inv.user_id) ?? { totalBilled: 0, invoiceCount: 0, paidCount: 0 };
+      s.invoiceCount++;
+      if (inv.status === "PAID") { s.paidCount++; s.totalBilled += inv.amount ?? 0; }
+      stats.set(inv.user_id, s);
+    }
+    const adminEmails = (process.env.ADMIN_EMAILS ?? "").split(",").map((e) => e.trim());
+    const merchants = users.map((u) => ({
+      id: u.id, email: u.email ?? "", companyName: (u.user_metadata?.company_name as string) ?? "",
+      plan: (u.user_metadata?.plan as string) ?? "free",
+      isSuspended: u.banned_until != null && new Date(u.banned_until) > new Date(),
+      isAdmin: adminEmails.includes(u.email ?? ""),
+      createdAt: u.created_at, lastSignIn: u.last_sign_in_at ?? null,
+      ...(stats.get(u.id) ?? { totalBilled: 0, invoiceCount: 0, paidCount: 0 }),
+    }));
+    res.json({ data: merchants, total: merchants.length });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+adminApi.get("/transactions", async (req, res) => {
+  const { limit, offset } = getPagination(req.query);
+  try {
+    const { data, error, count } = await supabaseAdmin.from("transactions").select("*", { count: "exact" }).order("created_at", { ascending: false }).range(offset, offset + limit - 1);
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    res.json({ data, total: count ?? 0, limit, offset });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+adminApi.get("/gateways", async (_req, res) => {
+  const { data: configs } = await supabaseAdmin.from("gateway_configs").select("gateway, user_id, environment, updated_at");
+  const byGateway = (configs ?? []).reduce<Record<string, { count: number; env: string }>>((acc, c) => {
+    if (!acc[c.gateway]) acc[c.gateway] = { count: 0, env: c.environment ?? "live" };
+    acc[c.gateway].count++; return acc;
+  }, {});
+  res.json({
+    gateways: [
+      { id: "stripe", name: "Stripe", status: process.env.STRIPE_SECRET_KEY ? "active" : "not_configured", merchantCount: byGateway["stripe"]?.count ?? 0, environment: byGateway["stripe"]?.env ?? null },
+      { id: "paypal", name: "PayPal", status: process.env.PAYPAL_CLIENT_ID ? "active" : "not_configured", merchantCount: byGateway["paypal"]?.count ?? 0, environment: "live" },
+      { id: "promptpay", name: "PromptPay", status: "active", merchantCount: 0, environment: "production" },
+      { id: "crypto", name: "Crypto Pay", status: "development", merchantCount: 0, environment: null },
+    ],
+    sseClients: 0,
+    recentLogCount: recentLogs.length,
+  });
+});
+
+adminApi.patch("/merchants/:userId/plan", async (req, res) => {
+  const { userId } = req.params;
+  const { plan } = req.body as { plan: "free" | "pro" };
+  if (!["free", "pro"].includes(plan)) { res.status(400).json({ error: "plan must be 'free' or 'pro'" }); return; }
+  try {
+    await supabaseAdmin.auth.admin.updateUserById(userId, { user_metadata: { plan } });
+    addLog("system", `Admin set plan=${plan} for ${userId}`);
+    res.json({ success: true, userId, plan });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+adminApi.patch("/merchants/:userId/status", async (req, res) => {
+  const { userId } = req.params;
+  const { action } = req.body as { action: "suspend" | "unsuspend" };
+  if (!["suspend", "unsuspend"].includes(action)) { res.status(400).json({ error: "action must be 'suspend' or 'unsuspend'" }); return; }
+  try {
+    await supabaseAdmin.auth.admin.updateUserById(userId, { ban_duration: action === "suspend" ? "876000h" : "none" });
+    addLog("system", `Admin ${action}ed merchant ${userId}`);
+    res.json({ success: true, userId, action });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.use("/api/admin", adminApi);
 
 // ─── Export for Vercel ────────────────────────────────────────────────────────
 export default app;

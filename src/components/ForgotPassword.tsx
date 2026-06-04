@@ -5,10 +5,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { MailCheck, AlertCircle } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
 import { supabase } from '../lib/supabase';
 
 export default function ForgotPassword() {
+  const reduced = useReducedMotion();
   const [email, setEmail] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -43,9 +44,10 @@ export default function ForgotPassword() {
         title="Check your email" 
         subtitle="We've sent a password reset link to your email."
       >
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.95 }}
+        <motion.div
+          initial={{ opacity: 0, scale: reduced ? 1 : 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: reduced ? 0.15 : 0.3 }}
           className="flex flex-col items-center justify-center py-6 text-center"
         >
           <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mb-6">

@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useAuth } from '../lib/auth-context';
 import { 
   Link as LinkIcon, 
   Plus, 
@@ -33,15 +34,11 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
 
-const mockPaymentLinks = [
-  { id: 'link_1mN2aP', name: 'Premium Subscription (Yearly)', amount: 199.00, currency: 'USD', status: 'Active', createdAt: '2026-05-28T10:00:00Z', payments: 45, revenue: 8955.00, methods: ['stripe', 'paypal'], visits: 124, conversion: 36.2 },
-  { id: 'link_8kQ9cS', name: 'Consulting Session', amount: 150.00, currency: 'USD', status: 'Active', createdAt: '2026-05-25T14:30:00Z', payments: 12, revenue: 1800.00, methods: ['stripe'], visits: 45, conversion: 26.6 },
-  { id: 'link_3vT5mX', name: 'Digital Web Toolkit', amount: 49.00, currency: 'USD', status: 'Disabled', createdAt: '2026-04-12T09:15:00Z', payments: 312, revenue: 15288.00, methods: ['stripe', 'crypto', 'promptpay'], visits: 1450, conversion: 21.5 },
-  { id: 'link_7pB2rL', name: 'Event Ticket - Early Bird', amount: 89.00, currency: 'USD', status: 'Expired', createdAt: '2026-03-01T08:00:00Z', payments: 150, revenue: 13350.00, methods: ['stripe', 'paypal'], visits: 380, conversion: 39.4 },
-  { id: 'link_9zL1kM', name: 'Freelance Milestone 1', amount: 500.00, currency: 'USD', status: 'Completed', createdAt: '2026-05-29T11:45:00Z', payments: 1, revenue: 500.00, methods: ['crypto'], visits: 2, conversion: 50.0 },
-];
-
 export default function PaymentLinks() {
+  const { session } = useAuth();
+  const [links, setLinks] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -62,11 +59,64 @@ export default function PaymentLinks() {
     }
   });
 
-  const filteredLinks = mockPaymentLinks.filter(link => {
-    if (statusFilter !== 'ALL' && link.status !== statusFilter) return false;
+  const fetchLinks = useCallback(async () => {
+    if (!session) return;
+    try {
+      setIsLoading(true);
+      const res = await fetch('/api/payment-links', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const json = await res.json();
+      setLinks(json.data ?? []);
+    } catch (err) {
+      console.error('Failed to fetch payment links:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [session]);
+
+  useEffect(() => { fetchLinks(); }, [fetchLinks]);
+
+  async function handleSubmitCreate() {
+    if (!session || !formData.name || !formData.amount) return;
+    try {
+      setIsSubmitting(true);
+      const res = await fetch('/api/payment-links', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          title: formData.name,
+          amount: parseFloat(formData.amount),
+          currency: formData.currency,
+          methods: formData.methods,
+          description: formData.description,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        alert(err.error ?? 'Failed to create link');
+        return;
+      }
+      setIsCreateModalOpen(false);
+      setFormData({ name: '', description: '', amount: '', currency: 'USD', methods: { stripe: true, paypal: false, promptpay: false, crypto: false } });
+      await fetchLinks();
+    } catch (err) {
+      console.error('Create link error:', err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  const filteredLinks = links.filter(link => {
+    const status = link.is_active ? 'Active' : 'Disabled';
+    if (statusFilter !== 'ALL' && status !== statusFilter) return false;
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
-      return link.name.toLowerCase().includes(term) || link.id.toLowerCase().includes(term);
+      return (link.title ?? '').toLowerCase().includes(term) || (link.id ?? '').toLowerCase().includes(term);
     }
     return true;
   });
@@ -91,9 +141,9 @@ export default function PaymentLinks() {
     }
   };
 
-  const handleCopyLink = (id: string) => {
-    navigator.clipboard.writeText(`https://fintrust.app/pay/${id}`);
-    // Show toast in real app
+  const handleCopyLink = (link: any) => {
+    const url = link.reference ?? `${window.location.origin}/pay/${link.id}`;
+    navigator.clipboard.writeText(url);
   };
 
   return (
@@ -118,27 +168,29 @@ export default function PaymentLinks() {
         <Card className="border-slate-200 dark:border-slate-800 shadow-sm">
           <CardContent className="p-4 sm:p-6 flex flex-col">
             <span className="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-1">Total Links</span>
-            <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">128</span>
+            <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">{isLoading ? '—' : links.length}</span>
           </CardContent>
         </Card>
         <Card className="border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden group">
           <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/10 rounded-full blur-2xl -mr-8 -mt-8" />
           <CardContent className="p-4 sm:p-6 flex flex-col">
             <span className="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-1">Active Links</span>
-            <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">32</span>
+            <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">{isLoading ? '—' : links.filter(l => l.is_active).length}</span>
           </CardContent>
         </Card>
         <Card className="border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden group">
           <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-500/10 rounded-full blur-2xl -mr-8 -mt-8" />
           <CardContent className="p-4 sm:p-6 flex flex-col">
-             <span className="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-1">Completed Payments</span>
-             <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">520</span>
+             <span className="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-1">Stripe Links</span>
+             <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">{isLoading ? '—' : links.filter(l => l.reference).length}</span>
           </CardContent>
         </Card>
         <Card className="border-slate-200 dark:border-slate-800 shadow-sm">
           <CardContent className="p-4 sm:p-6 flex flex-col">
-            <span className="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-1">Revenue Collected</span>
-            <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">$39,893.00</span>
+            <span className="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-1">Total Value</span>
+            <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
+              {isLoading ? '—' : `$${links.reduce((s, l) => s + Number(l.amount), 0).toLocaleString(undefined, {minimumFractionDigits: 2})}`}
+            </span>
           </CardContent>
         </Card>
       </div>
@@ -200,50 +252,48 @@ export default function PaymentLinks() {
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredLinks.map(link => (
+                filteredLinks.map(link => {
+                  const status = link.is_active ? 'Active' : 'Disabled';
+                  return (
                   <TableRow key={link.id} className="group hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
                     <TableCell className="px-6 py-4">
-                      <div className="font-semibold text-slate-900 dark:text-slate-100">{link.name}</div>
+                      <div className="font-semibold text-slate-900 dark:text-slate-100">{link.title}</div>
                       <div className="flex items-center gap-2 mt-1">
-                        <span className="text-xs font-mono text-slate-500">{link.id}</span>
-                        <button 
-                          onClick={() => handleCopyLink(link.id)}
+                        <span className="text-xs font-mono text-slate-500 truncate max-w-[180px]">{link.reference ?? link.id}</span>
+                        <button
+                          onClick={() => handleCopyLink(link)}
                           className="text-slate-400 hover:text-indigo-600 transition-colors"
                           title="Copy Link URL"
                         >
                           <Copy className="h-3 w-3" />
                         </button>
                       </div>
-                      <div className="text-[11px] text-slate-400 mt-1">Created {new Date(link.createdAt).toLocaleDateString()}</div>
+                      <div className="text-[11px] text-slate-400 mt-1">Created {new Date(link.created_at).toLocaleDateString()}</div>
                     </TableCell>
                     <TableCell>
                       <div className="font-semibold text-slate-900 dark:text-slate-100">
-                        {link.amount.toLocaleString(undefined, {minimumFractionDigits: 2})} <span className="text-xs font-normal text-slate-500">{link.currency}</span>
+                        {Number(link.amount).toLocaleString(undefined, {minimumFractionDigits: 2})}
                       </div>
-                      <div className="flex items-center gap-1 mt-1.5 opacity-60">
-                        {link.methods.map(m => (
-                          <div key={m} className="bg-slate-200 dark:bg-slate-800 rounded px-1 py-0.5">
-                            {m === 'stripe' && <CreditCard className="w-3 h-3 text-indigo-600 dark:text-indigo-400" />}
-                            {m === 'paypal' && <span className="text-[9px] font-bold text-blue-700 dark:text-blue-400 uppercase tracking-tighter block leading-none py-0.5 px-0.5">Pay</span>}
-                            {m === 'promptpay' && <span className="text-[9px] font-bold text-indigo-800 dark:text-indigo-300 uppercase tracking-tighter block leading-none py-0.5 px-0.5">PP</span>}
-                            {m === 'crypto' && <Bitcoin className="w-3 h-3 text-orange-500" />}
+                      {link.reference && (
+                        <div className="flex items-center gap-1 mt-1.5 opacity-60">
+                          <div className="bg-slate-200 dark:bg-slate-800 rounded px-1 py-0.5">
+                            <CreditCard className="w-3 h-3 text-indigo-600 dark:text-indigo-400" />
                           </div>
-                        ))}
-                      </div>
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline" className={`font-medium px-2 py-0.5 flex w-max items-center gap-1.5 ${getStatusBadge(link.status)}`}>
-                        {getStatusIcon(link.status)}
-                        {link.status}
+                      <Badge variant="outline" className={`font-medium px-2 py-0.5 flex w-max items-center gap-1.5 ${getStatusBadge(status)}`}>
+                        {getStatusIcon(status)}
+                        {status}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                       <div className="font-medium text-slate-900 dark:text-slate-100">{link.payments} <span className="text-xs font-normal text-slate-500">sales</span></div>
-                       <div className="text-xs text-slate-500 mt-1">{link.conversion}% conv. rate <span className="text-[10px]">({link.visits} visits)</span></div>
+                       <div className="font-medium text-slate-900 dark:text-slate-100">{link.clicks ?? 0} <span className="text-xs font-normal text-slate-500">clicks</span></div>
                     </TableCell>
                     <TableCell className="text-right px-6">
                       <div className="font-semibold text-slate-900 dark:text-slate-100">
-                        ${link.revenue.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                        ${Number(link.amount).toLocaleString(undefined, {minimumFractionDigits: 2})}
                       </div>
                     </TableCell>
                     <TableCell className="pr-6">
@@ -256,12 +306,14 @@ export default function PaymentLinks() {
                           } />
                           <DropdownMenuContent align="end">
                             <DropdownMenuGroup>
-                              <DropdownMenuItem className="cursor-pointer" onClick={() => handleCopyLink(link.id)}>
+                              <DropdownMenuItem className="cursor-pointer" onClick={() => handleCopyLink(link)}>
                                 <Copy className="mr-2 w-4 h-4 text-slate-500" /> Copy Link
                               </DropdownMenuItem>
-                              <DropdownMenuItem className="cursor-pointer">
-                                <ExternalLink className="mr-2 w-4 h-4 text-slate-500" /> Visit Page
-                              </DropdownMenuItem>
+                              {link.reference && (
+                                <DropdownMenuItem className="cursor-pointer" onClick={() => window.open(link.reference, '_blank')}>
+                                  <ExternalLink className="mr-2 w-4 h-4 text-slate-500" /> Open in Stripe
+                                </DropdownMenuItem>
+                              )}
                               <DropdownMenuItem className="cursor-pointer" onClick={() => {
                                 setSelectedLink(link);
                                 setIsQRModalOpen(true);
@@ -271,7 +323,6 @@ export default function PaymentLinks() {
                             </DropdownMenuGroup>
                             <DropdownMenuSeparator />
                             <DropdownMenuGroup>
-                              <DropdownMenuItem className="cursor-pointer">Edit Link</DropdownMenuItem>
                               <DropdownMenuItem className="cursor-pointer text-amber-600">Disable Link</DropdownMenuItem>
                               <DropdownMenuItem className="cursor-pointer text-red-600">Delete</DropdownMenuItem>
                             </DropdownMenuGroup>
@@ -279,7 +330,8 @@ export default function PaymentLinks() {
                         </DropdownMenu>
                     </TableCell>
                   </TableRow>
-                ))
+                  );
+                })
               )}
             </TableBody>
           </Table>
@@ -296,46 +348,44 @@ export default function PaymentLinks() {
                 </div>
              </div>
           ) : (
-            filteredLinks.map(link => (
+            filteredLinks.map(link => {
+              const status = link.is_active ? 'Active' : 'Disabled';
+              return (
               <div key={link.id} className="p-4 bg-white dark:bg-slate-900">
                 <div className="flex justify-between items-start mb-2">
                   <div>
-                    <h3 className="font-semibold text-slate-900 dark:text-slate-100">{link.name}</h3>
+                    <h3 className="font-semibold text-slate-900 dark:text-slate-100">{link.title}</h3>
                     <div className="flex items-center gap-2 mt-1">
-                      <span className="text-xs font-mono text-slate-500">{link.id}</span>
-                      <button onClick={() => handleCopyLink(link.id)} className="text-indigo-600">
+                      <span className="text-xs font-mono text-slate-500 truncate max-w-[160px]">{link.id}</span>
+                      <button onClick={() => handleCopyLink(link)} className="text-indigo-600">
                         <Copy className="h-3 w-3" />
                       </button>
                     </div>
                   </div>
-                  <Badge variant="outline" className={`font-medium px-1.5 py-0 text-[10px] flex items-center gap-1 ${getStatusBadge(link.status)}`}>
-                    {link.status}
+                  <Badge variant="outline" className={`font-medium px-1.5 py-0 text-[10px] flex items-center gap-1 ${getStatusBadge(status)}`}>
+                    {status}
                   </Badge>
                 </div>
-                
+
                 <div className="flex items-center justify-between mt-4 pb-4 border-b border-slate-100 dark:border-slate-800">
                   <div className="font-semibold text-lg text-slate-900 dark:text-slate-100">
-                    {link.amount.toLocaleString(undefined, {minimumFractionDigits: 2})} <span className="text-xs font-normal text-slate-500">{link.currency}</span>
+                    ${Number(link.amount).toLocaleString(undefined, {minimumFractionDigits: 2})}
                   </div>
                   <div className="text-right">
-                    <div className="font-semibold text-slate-900 dark:text-slate-100">${link.revenue.toLocaleString()}</div>
-                    <div className="text-xs text-slate-500">{link.payments} sales</div>
+                    <div className="text-xs text-slate-500">{link.clicks ?? 0} clicks</div>
                   </div>
                 </div>
-                
+
                 <div className="flex items-center justify-between mt-3">
                   <div className="flex items-center gap-1 opacity-70">
-                    {link.methods.map(m => (
-                      <div key={m} className="bg-slate-100 dark:bg-slate-800 rounded px-1 py-0.5">
-                         {m === 'stripe' && <CreditCard className="w-3 h-3 text-indigo-600 dark:text-indigo-400" />}
-                         {m === 'paypal' && <span className="text-[9px] font-bold text-blue-700 dark:text-blue-400 uppercase tracking-tighter block leading-none py-0.5 px-0.5">Pay</span>}
-                         {m === 'promptpay' && <span className="text-[9px] font-bold text-indigo-800 dark:text-indigo-300 uppercase tracking-tighter block leading-none py-0.5 px-0.5">PP</span>}
-                         {m === 'crypto' && <Bitcoin className="w-3 h-3 text-orange-500" />}
+                    {link.reference && (
+                      <div className="bg-slate-100 dark:bg-slate-800 rounded px-1 py-0.5">
+                        <CreditCard className="w-3 h-3 text-indigo-600 dark:text-indigo-400" />
                       </div>
-                    ))}
+                    )}
                   </div>
                   <div className="flex gap-2">
-                    <Button variant="outline" size="sm" className="h-8 shadow-sm">
+                    <Button variant="outline" size="sm" className="h-8 shadow-sm" onClick={() => { setSelectedLink(link); setIsQRModalOpen(true); }}>
                       <QrCode className="w-3 h-3 mr-1" /> QR
                     </Button>
                     <DropdownMenu>
@@ -345,8 +395,8 @@ export default function PaymentLinks() {
                         </Button>
                       } />
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem className="cursor-pointer" onClick={() => handleCopyLink(link.id)}>Copy Link</DropdownMenuItem>
-                        <DropdownMenuItem className="cursor-pointer">Edit Link</DropdownMenuItem>
+                        <DropdownMenuItem className="cursor-pointer" onClick={() => handleCopyLink(link)}>Copy Link</DropdownMenuItem>
+                        {link.reference && <DropdownMenuItem className="cursor-pointer" onClick={() => window.open(link.reference, '_blank')}>Open in Stripe</DropdownMenuItem>}
                         <DropdownMenuSeparator />
                         <DropdownMenuItem className="cursor-pointer text-amber-600">Disable</DropdownMenuItem>
                       </DropdownMenuContent>
@@ -354,7 +404,7 @@ export default function PaymentLinks() {
                   </div>
                 </div>
               </div>
-            ))
+            ); })
           )}
         </div>
       </Card>
@@ -363,14 +413,15 @@ export default function PaymentLinks() {
       <Dialog open={isQRModalOpen} onOpenChange={setIsQRModalOpen}>
         <DialogContent className="sm:max-w-[400px]">
           <DialogHeader className="text-center pb-2">
-            <DialogTitle className="text-center">{selectedLink?.name}</DialogTitle>
-            <DialogDescription className="text-center cursor-pointer hover:text-indigo-600 transition-colors flex items-center justify-center gap-1 mt-1 font-mono text-xs">
-              fintrust.app/pay/{selectedLink?.id} <Copy className="w-3 h-3" />
+            <DialogTitle className="text-center">{selectedLink?.title}</DialogTitle>
+            <DialogDescription className="text-center cursor-pointer hover:text-indigo-600 transition-colors flex items-center justify-center gap-1 mt-1 font-mono text-xs"
+              onClick={() => selectedLink && handleCopyLink(selectedLink)}>
+              {selectedLink?.reference ? new URL(selectedLink.reference).hostname + '/...' : selectedLink?.id} <Copy className="w-3 h-3" />
             </DialogDescription>
           </DialogHeader>
           <div className="py-6 flex flex-col items-center justify-center border-y border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
              <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
-               <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=https://fintrust.app/pay/${selectedLink?.id}`} alt="QR Code" className="w-[200px] h-[200px]" />
+               <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(selectedLink?.reference ?? `${window.location.origin}/pay/${selectedLink?.id}`)}`} alt="QR Code" className="w-[200px] h-[200px]" />
              </div>
              <p className="text-xs text-slate-500 mt-4 text-center max-w-[250px]">
                Scan this QR code with any smartphone camera to open the payment page.
@@ -532,9 +583,9 @@ export default function PaymentLinks() {
             </div>
 
             <div className="pt-6 shrink-0 border-t border-slate-100 dark:border-slate-800 mt-4 flex items-center justify-between gap-3 bg-white dark:bg-slate-950">
-              <Button variant="ghost" onClick={() => setIsCreateModalOpen(false)}>Cancel</Button>
-              <Button onClick={() => setIsCreateModalOpen(false)}>
-                Create Link <ArrowRight className="w-4 h-4 ml-2" />
+              <Button variant="ghost" onClick={() => setIsCreateModalOpen(false)} disabled={isSubmitting}>Cancel</Button>
+              <Button onClick={handleSubmitCreate} disabled={isSubmitting || !formData.name || !formData.amount}>
+                {isSubmitting ? 'Creating…' : 'Create Link'} <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
             </div>
           </div>
