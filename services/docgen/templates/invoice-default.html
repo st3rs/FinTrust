@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ใบแจ้งหนี้ {{invoice.number}}</title>
+  <!--
+    Sarabun is loaded from Google Fonts so Thai text renders correctly in
+    Gotenberg (Chromium). The waitDelay option in gotenberg.ts gives the font
+    time to load before capturing the PDF.
+    For air-gapped deployments, replace with a @font-face data URI.
+  -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Sarabun', 'TH Sarabun New', sans-serif;
+      font-size: 13px;
+      color: #1e293b;
+      background: #fff;
+      line-height: 1.6;
+    }
+
+    .page {
+      width: 100%;
+      padding: 0;
+    }
+
+    /* ── Header bar ─────────────────────────────────────────── */
+    .header {
+      background: #1e3a5f;
+      color: #fff;
+      padding: 24px 32px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .header-left h1 {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      margin-bottom: 6px;
+    }
+
+    .header-left .company-name {
+      font-size: 15px;
+      font-weight: 600;
+      opacity: 0.9;
+    }
+
+    .header-left .company-meta {
+      font-size: 12px;
+      opacity: 0.75;
+      margin-top: 4px;
+      line-height: 1.8;
+    }
+
+    .header-right {
+      text-align: right;
+    }
+
+    .header-right .invoice-number {
+      font-size: 18px;
+      font-weight: 700;
+      background: rgba(255,255,255,0.15);
+      padding: 6px 14px;
+      border-radius: 6px;
+      margin-bottom: 10px;
+      display: inline-block;
+    }
+
+    .header-right table {
+      margin-left: auto;
+    }
+
+    .header-right td {
+      padding: 2px 0;
+      font-size: 12px;
+      opacity: 0.85;
+    }
+
+    .header-right td:first-child {
+      padding-right: 12px;
+      opacity: 0.65;
+    }
+
+    /* ── Client block ───────────────────────────────────────── */
+    .client-section {
+      padding: 24px 32px;
+      display: flex;
+      justify-content: space-between;
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    .client-block h3 {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #94a3b8;
+      margin-bottom: 8px;
+    }
+
+    .client-block .client-name {
+      font-size: 16px;
+      font-weight: 700;
+      color: #1e293b;
+      margin-bottom: 4px;
+    }
+
+    .client-block .client-meta {
+      font-size: 12px;
+      color: #64748b;
+      line-height: 1.8;
+    }
+
+    /* ── Items table ────────────────────────────────────────── */
+    .items-section {
+      padding: 0 32px;
+      margin-top: 24px;
+    }
+
+    .items-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .items-table thead tr {
+      background: #f1f5f9;
+    }
+
+    .items-table th {
+      padding: 10px 12px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #64748b;
+      text-align: left;
+      border-bottom: 2px solid #e2e8f0;
+    }
+
+    .items-table th.num { text-align: center; width: 40px; }
+    .items-table th.qty { text-align: right; width: 80px; }
+    .items-table th.price { text-align: right; width: 110px; }
+    .items-table th.total { text-align: right; width: 120px; }
+
+    .items-table tbody tr {
+      border-bottom: 1px solid #f1f5f9;
+    }
+
+    .items-table tbody tr:last-child {
+      border-bottom: 2px solid #e2e8f0;
+    }
+
+    .items-table td {
+      padding: 12px;
+      color: #334155;
+    }
+
+    .items-table td.num { text-align: center; color: #94a3b8; }
+    .items-table td.qty { text-align: right; }
+    .items-table td.price { text-align: right; }
+    .items-table td.total { text-align: right; font-weight: 600; }
+
+    /* ── Totals ─────────────────────────────────────────────── */
+    .totals-section {
+      padding: 0 32px;
+      margin-top: 4px;
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .totals-table {
+      width: 320px;
+      border-collapse: collapse;
+    }
+
+    .totals-table td {
+      padding: 6px 12px;
+      font-size: 13px;
+    }
+
+    .totals-table td:last-child {
+      text-align: right;
+      font-weight: 500;
+    }
+
+    .totals-table .subtotal td { color: #475569; }
+    .totals-table .vat td { color: #475569; }
+    .totals-table .wht td { color: #ef4444; }
+    .totals-table .wht td:last-child { color: #ef4444; }
+
+    .totals-table .grand-total {
+      border-top: 2px solid #1e3a5f;
+      margin-top: 4px;
+    }
+
+    .totals-table .grand-total td {
+      font-size: 16px;
+      font-weight: 700;
+      color: #1e3a5f;
+      padding-top: 10px;
+    }
+
+    /* ── Payment section ────────────────────────────────────── */
+    .payment-section {
+      padding: 24px 32px 0;
+      display: flex;
+      gap: 32px;
+      align-items: flex-start;
+    }
+
+    .qr-block h3 {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #94a3b8;
+      margin-bottom: 10px;
+    }
+
+    .qr-block .qr-img {
+      width: 120px;
+      height: 120px;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 4px;
+      display: block;
+    }
+
+    .qr-block .qr-placeholder {
+      width: 120px;
+      height: 120px;
+      border: 2px dashed #cbd5e1;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #94a3b8;
+      font-size: 11px;
+      text-align: center;
+    }
+
+    .notes-block {
+      flex: 1;
+    }
+
+    .notes-block h3 {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #94a3b8;
+      margin-bottom: 8px;
+    }
+
+    .notes-block p {
+      font-size: 12px;
+      color: #64748b;
+      line-height: 1.8;
+    }
+
+    /* ── Footer ─────────────────────────────────────────────── */
+    .footer {
+      margin-top: 32px;
+      padding: 16px 32px;
+      background: #f8fafc;
+      border-top: 1px solid #e2e8f0;
+      text-align: center;
+      font-size: 11px;
+      color: #94a3b8;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .badge-unpaid { background: #fef3c7; color: #92400e; }
+    .badge-paid   { background: #dcfce7; color: #166534; }
+    .badge-draft  { background: #f1f5f9; color: #64748b; }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <div class="header">
+    <div class="header-left">
+      <h1>INVOICE</h1>
+      <div class="company-name">{{seller.name}}</div>
+      <div class="company-meta">
+        {{seller.address}}<br />
+        เลขประจำตัวผู้เสียภาษี: {{seller.taxId}}<br />
+        {{seller.phone}} · {{seller.email}}
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="invoice-number">{{invoice.number}}</div>
+      <table>
+        <tr>
+          <td>วันที่ออกใบแจ้งหนี้</td>
+          <td>{{invoice.date}}</td>
+        </tr>
+        <tr>
+          <td>วันครบกำหนด</td>
+          <td>{{invoice.dueDate}}</td>
+        </tr>
+        <tr>
+          <td>สกุลเงิน</td>
+          <td>{{invoice.currency}}</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Client block ───────────────────────────────────────────────────── -->
+  <div class="client-section">
+    <div class="client-block">
+      <h3>เรียนเก็บเงินจาก / Bill To</h3>
+      <div class="client-name">{{client.name}}</div>
+      <div class="client-meta">
+        {{client.address}}<br />
+        เลขประจำตัวผู้เสียภาษี: {{client.taxId}}<br />
+        {{client.email}}
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Line items ─────────────────────────────────────────────────────── -->
+  <div class="items-section">
+    <table class="items-table">
+      <thead>
+        <tr>
+          <th class="num">#</th>
+          <th>รายการ / Description</th>
+          <th class="qty">จำนวน</th>
+          <th class="price">ราคาต่อหน่วย</th>
+          <th class="total">จำนวนเงิน</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{#items}}
+        <tr>
+          <td class="num">{{index}}</td>
+          <td>{{description}}</td>
+          <td class="qty">{{quantity|number}}</td>
+          <td class="price">{{unitPrice|currency}}</td>
+          <td class="total">{{total|currency}}</td>
+        </tr>
+        {{/items}}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── Totals ─────────────────────────────────────────────────────────── -->
+  <div class="totals-section">
+    <table class="totals-table">
+      <tr class="subtotal">
+        <td>ยอดรวมก่อนภาษี / Subtotal</td>
+        <td>{{subtotal|currency}}</td>
+      </tr>
+      <tr class="vat">
+        <td>ภาษีมูลค่าเพิ่ม {{vatRate}}% / VAT</td>
+        <td>{{vatAmount|currency}}</td>
+      </tr>
+      {{#hasWht}}
+      <tr class="wht">
+        <td>หัก ณ ที่จ่าย {{whtRate}}% / WHT</td>
+        <td>−{{whtAmount|currency}}</td>
+      </tr>
+      {{/hasWht}}
+      <tr class="grand-total">
+        <td>ยอดชำระสุทธิ / Total Due</td>
+        <td>{{total|currency}}</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- ── Payment ────────────────────────────────────────────────────────── -->
+  <div class="payment-section">
+    <div class="qr-block">
+      <h3>ชำระผ่าน PromptPay</h3>
+      {{#promptpayQr}}
+      <img class="qr-img" src="{{{promptpayQr}}}" alt="PromptPay QR" />
+      {{/promptpayQr}}
+      {{^promptpayQr}}
+      <div class="qr-placeholder">QR Code<br />(ไม่ระบุ)</div>
+      {{/promptpayQr}}
+    </div>
+    <div class="notes-block">
+      <h3>หมายเหตุ / Notes</h3>
+      <p>{{notes}}</p>
+      <br />
+      <h3>เงื่อนไขการชำระเงิน / Payment Terms</h3>
+      <p>{{paymentTerms}}</p>
+    </div>
+  </div>
+
+  <!-- ── Footer ─────────────────────────────────────────────────────────── -->
+  <div class="footer">
+    เอกสารนี้ออกโดยระบบ InvoicePro · FinTrust ·
+    ขอบคุณสำหรับธุรกิจของคุณ / Thank you for your business
+  </div>
+
+</div>
+</body>
+</html>

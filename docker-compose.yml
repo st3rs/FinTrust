@@ -1,0 +1,36 @@
+version: "3.8"
+
+services:
+  # ── Gotenberg 8 — Chromium-based PDF renderer ─────────────────────────────
+  # Does NOT run on Vercel serverless. Must be a separate VPS container.
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    ports:
+      - "3001:3000"
+    restart: unless-stopped
+    # Gotenberg has network access by default so the HTML template can load
+    # Google Fonts (Sarabun) from CDN. For air-gapped deployments, mount a
+    # local font directory and use a @font-face data URI in the template instead.
+
+  # ── FinTrust docgen service ───────────────────────────────────────────────
+  docgen:
+    build:
+      context: ./services/docgen
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      GOTENBERG_URL: "http://gotenberg:3000"
+      SUPABASE_URL: "${VITE_SUPABASE_URL}"
+      SUPABASE_SERVICE_ROLE_KEY: "${SUPABASE_SERVICE_ROLE_KEY}"
+      SUPABASE_STORAGE_BUCKET: "${SUPABASE_STORAGE_BUCKET:-documents}"
+      DOCGEN_API_KEYS_SALT: "${DOCGEN_API_KEYS_SALT}"
+    depends_on:
+      - gotenberg
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
