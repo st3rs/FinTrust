@@ -85,15 +85,15 @@ export default function Login() {
       }
     >
       {error && (
-        <div className="mb-6 p-4 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800/30 rounded-lg flex items-start gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
-          <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
-          <div className="text-sm font-medium text-red-700 dark:text-red-300">{error}</div>
+        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
+          <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+          <div className="text-sm font-medium text-red-700">{error}</div>
         </div>
       )}
 
       <form className="space-y-6" onSubmit={handleSubmit}>
         <div>
-          <Label htmlFor="email" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+          <Label htmlFor="email" className="block text-sm font-medium text-slate-700 mb-1">
             Email address
           </Label>
           <Input 
@@ -105,12 +105,12 @@ export default function Login() {
             placeholder="you@example.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="dark:bg-slate-950 dark:border-slate-800"
+            className="bg-white border-slate-200"
           />
         </div>
 
         <div>
-          <Label htmlFor="password" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+          <Label htmlFor="password" className="block text-sm font-medium text-slate-700 mb-1">
             Password
           </Label>
           <Input 
@@ -121,7 +121,7 @@ export default function Login() {
             required 
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="dark:bg-slate-950 dark:border-slate-800"
+            className="bg-white border-slate-200"
           />
         </div>
 
@@ -131,9 +131,9 @@ export default function Login() {
               id="remember-me"
               name="remember-me"
               type="checkbox"
-              className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary dark:border-slate-700 dark:bg-slate-950 dark:checked:bg-primary"
+              className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary"
             />
-            <label htmlFor="remember-me" className="ml-2 block text-sm text-slate-900 dark:text-slate-300">
+            <label htmlFor="remember-me" className="ml-2 block text-sm text-slate-900">
               Remember me
             </label>
           </div>
@@ -159,15 +159,15 @@ export default function Login() {
       <div className="mt-6">
         <div className="relative">
           <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-slate-300 dark:border-slate-800" />
+            <div className="w-full border-t border-slate-300" />
           </div>
           <div className="relative flex justify-center text-sm">
-            <span className="bg-white dark:bg-slate-900 px-2 text-slate-500 dark:text-slate-400">Or continue with</span>
+            <span className="bg-white px-2 text-slate-500">Or continue with</span>
           </div>
         </div>
 
         <div className="mt-6 grid grid-cols-2 gap-3">
-          <Button variant="outline" type="button" className="w-full dark:border-slate-800 dark:hover:bg-slate-800 dark:bg-slate-950 text-slate-700 dark:text-slate-300">
+          <Button variant="outline" type="button" className="w-full bg-white text-slate-700">
             <svg className="mr-2 h-4 w-4" aria-hidden="true" viewBox="0 0 24 24">
               <path
                 d="M12.0003 4.75C13.7703 4.75 15.3553 5.36002 16.6053 6.54998L20.0303 3.125C17.9502 1.19 15.2353 0 12.0003 0C7.31028 0 3.25527 2.69 1.28027 6.60998L5.27028 9.70498C6.21525 6.86002 8.87028 4.75 12.0003 4.75Z"
@@ -194,7 +194,7 @@ export default function Login() {
             type="button"
             onClick={handleGithubLogin} 
             disabled={isGithubLoading}
-            className="w-full dark:border-slate-800 dark:hover:bg-slate-800 dark:bg-slate-950 text-slate-700 dark:text-slate-300"
+            className="w-full bg-white text-slate-700"
           >
             <Github className="mr-2 h-4 w-4" />
             {isGithubLoading ? "Connecting..." : "GitHub"}

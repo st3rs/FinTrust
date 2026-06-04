@@ -50,11 +50,11 @@ export default function ForgotPassword() {
           transition={{ duration: reduced ? 0.15 : 0.3 }}
           className="flex flex-col items-center justify-center py-6 text-center"
         >
-          <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mb-6">
+          <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mb-6">
             <MailCheck className="w-8 h-8" />
           </div>
-          <h3 className="text-lg font-medium text-slate-900 dark:text-white mb-2">Reset link sent!</h3>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mb-8 max-w-[250px]">
+          <h3 className="text-lg font-medium text-slate-900 mb-2">Reset link sent!</h3>
+          <p className="text-sm text-slate-500 mb-8 max-w-[250px]">
             Please check your inbox ({email}) and follow the instructions to reset your password.
           </p>
           <Link to="/login" className="w-full">
@@ -77,29 +77,29 @@ export default function ForgotPassword() {
       }
     >
       {error && (
-        <div className="mb-6 p-4 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800/30 rounded-lg flex items-start gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
-          <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
-          <div className="text-sm font-medium text-red-700 dark:text-red-300">{error}</div>
+        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
+          <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+          <div className="text-sm font-medium text-red-700">{error}</div>
         </div>
       )}
 
       <form className="space-y-6" onSubmit={handleSubmit}>
         <div>
-          <Label htmlFor="email" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+          <Label htmlFor="email" className="block text-sm font-medium text-slate-700 mb-1">
             Email address
           </Label>
-          <Input 
-            id="email" 
-            name="email" 
-            type="email" 
-            autoComplete="email" 
-            required 
+          <Input
+            id="email"
+            name="email"
+            type="email"
+            autoComplete="email"
+            required
             placeholder="you@example.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="dark:bg-slate-950 dark:border-slate-800"
+            className="bg-white border-slate-200"
           />
-          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+          <p className="mt-2 text-xs text-slate-500">
             We will send you an email with a link to reset your password.
           </p>
         </div>

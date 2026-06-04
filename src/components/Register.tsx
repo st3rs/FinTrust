@@ -75,11 +75,11 @@ export default function Register() {
         subtitle="Confirm registration to activate your merchant account"
       >
         <div className="flex flex-col items-center justify-center py-6 text-center animate-in fade-in zoom-in-95 duration-300">
-          <div className="w-16 h-16 bg-indigo-100 dark:bg-indigo-950/30 text-indigo-600 dark:text-indigo-400 rounded-full flex items-center justify-center mb-6">
+          <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mb-6">
             <Mail className="w-8 h-8" />
           </div>
-          <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">Check your email</h3>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mb-8 max-w-[280px]">
+          <h3 className="text-lg font-bold text-slate-900 mb-2">Check your email</h3>
+          <p className="text-sm text-slate-500 mb-8 max-w-[280px]">
             {successMsg}
           </p>
           <Link to="/login" className="w-full">
@@ -102,16 +102,16 @@ export default function Register() {
       }
     >
       {error && (
-        <div className="mb-6 p-4 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800/30 rounded-lg flex items-start gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
-          <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
-          <div className="text-sm font-medium text-red-700 dark:text-red-300">{error}</div>
+        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
+          <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+          <div className="text-sm font-medium text-red-700">{error}</div>
         </div>
       )}
 
       <form className="space-y-5" onSubmit={handleSubmit}>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <Label htmlFor="firstName" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+            <Label htmlFor="firstName" className="block text-sm font-medium text-slate-700 mb-1">
               First name
             </Label>
             <Input 
@@ -121,11 +121,11 @@ export default function Register() {
               required 
               value={firstName}
               onChange={(e) => setFirstName(e.target.value)}
-              className="dark:bg-slate-950 dark:border-slate-800"
+              className="bg-white border-slate-200"
             />
           </div>
           <div>
-            <Label htmlFor="lastName" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+            <Label htmlFor="lastName" className="block text-sm font-medium text-slate-700 mb-1">
               Last name
             </Label>
             <Input 
@@ -135,13 +135,13 @@ export default function Register() {
               required 
               value={lastName}
               onChange={(e) => setLastName(e.target.value)}
-              className="dark:bg-slate-950 dark:border-slate-800"
+              className="bg-white border-slate-200"
             />
           </div>
         </div>
 
         <div>
-          <Label htmlFor="company" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+          <Label htmlFor="company" className="block text-sm font-medium text-slate-700 mb-1">
             Company name
           </Label>
           <Input 
@@ -151,12 +151,12 @@ export default function Register() {
             placeholder="Acme Inc."
             value={company}
             onChange={(e) => setCompany(e.target.value)}
-            className="dark:bg-slate-950 dark:border-slate-800"
+            className="bg-white border-slate-200"
           />
         </div>
 
         <div>
-          <Label htmlFor="email" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+          <Label htmlFor="email" className="block text-sm font-medium text-slate-700 mb-1">
             Work email
           </Label>
           <Input 
@@ -168,12 +168,12 @@ export default function Register() {
             placeholder="you@company.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="dark:bg-slate-950 dark:border-slate-800"
+            className="bg-white border-slate-200"
           />
         </div>
 
         <div>
-          <Label htmlFor="password" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+          <Label htmlFor="password" className="block text-sm font-medium text-slate-700 mb-1">
             Password
           </Label>
           <Input 
@@ -184,7 +184,7 @@ export default function Register() {
             required 
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="dark:bg-slate-950 dark:border-slate-800"
+            className="bg-white border-slate-200"
           />
         </div>
 
@@ -194,9 +194,9 @@ export default function Register() {
             name="agree-terms"
             type="checkbox"
             required
-            className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary dark:border-slate-700 dark:bg-slate-950 dark:checked:bg-primary"
+            className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary"
           />
-          <label htmlFor="agree-terms" className="ml-2 block text-sm text-slate-900 dark:text-slate-300">
+          <label htmlFor="agree-terms" className="ml-2 block text-sm text-slate-900">
             I agree to the{' '}
             <a href="#" className="font-medium text-primary hover:text-primary/80">
               Terms of Service
