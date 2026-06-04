@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Search, PlusCircle } from 'lucide-react';
+import { Download, Loader2, Search, PlusCircle } from 'lucide-react';
 import { PaginationControls } from '@/components/ui/pagination-controls';
 import { usePagination } from '@/src/lib/use-pagination';
 import { Button } from '@/components/ui/button';
@@ -9,8 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth-context';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+import { renderDocument } from '../lib/docgenClient';
 
 
 export default function Invoices() {
@@ -18,6 +17,7 @@ export default function Invoices() {
   const [invoices, setInvoices] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const pagination = usePagination(20);
@@ -55,49 +55,65 @@ export default function Invoices() {
     }
   }
 
-  const generatePDF = (invoice: any) => {
-    const doc = new jsPDF();
-    const companyName = localStorage.getItem('companyName') || 'FinTrust Corp.';
-    
-    // Add title
-    doc.setFontSize(22);
-    doc.text('INVOICE', 20, 20);
-    
-    // Add Company Issuer
-    doc.setFontSize(12);
-    doc.text(companyName, 20, 30);
-    doc.setFontSize(10);
-    
-    // Add invoice info aligned right
-    const pageWidth = doc.internal.pageSize.width;
-    doc.text(`Invoice Number: ${invoice.id || 'INV-XXX'}`, pageWidth - 20, 20, { align: 'right' });
-    doc.text(`Date: ${new Date(invoice.date || invoice.created_at || Date.now()).toLocaleDateString()}`, pageWidth - 20, 25, { align: 'right' });
-    doc.text(`Due Date: ${new Date(invoice.dueDate || invoice.due_date || invoice.date || Date.now()).toLocaleDateString()}`, pageWidth - 20, 30, { align: 'right' });
-    doc.text(`Status: ${invoice.status}`, pageWidth - 20, 35, { align: 'right' });
-    
-    // Add client info
-    doc.setFontSize(12);
-    doc.text('Bill To:', 20, 50);
-    doc.setFontSize(10);
-    doc.text(invoice.client || 'Client', 20, 55);
-    
-    // Add table
-    autoTable(doc, {
-      startY: 70,
-      head: [['Description', 'Amount']],
-      body: [
-        ['Services Rendered', `$${invoice.amount?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '0.00'}`]
-      ],
-      foot: [
-        ['Total', `$${invoice.amount?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '0.00'}`]
-      ],
-      theme: 'grid',
-      headStyles: { fillColor: [79, 70, 229] }, // Indigo 600
-      footStyles: { fillColor: [248, 250, 252], textColor: [15, 23, 42] }
-    });
-    
-    // Save the PDF
-    doc.save(`${invoice.id || 'invoice'}.pdf`);
+  const downloadPDF = async (invoice: any) => {
+    setDownloadingId(invoice.id);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) throw new Error('Not authenticated');
+
+      const items: Array<{ description: string; quantity: number; unitPrice: number; total: number }> =
+        Array.isArray(invoice.metadata?.items) && invoice.metadata.items.length > 0
+          ? invoice.metadata.items.map((it: any) => ({
+              description: String(it.description ?? ''),
+              quantity: Number(it.quantity ?? 1),
+              unitPrice: Number(it.price ?? it.unitPrice ?? 0),
+              total: Number(it.price ?? it.unitPrice ?? 0) * Number(it.quantity ?? 1),
+            }))
+          : [{ description: 'Services Rendered', quantity: 1, unitPrice: Number(invoice.amount), total: Number(invoice.amount) }];
+
+      const subtotal = items.reduce((s, it) => s + it.total, 0);
+      const vatAmount = Math.round(subtotal * 0.07 * 100) / 100;
+
+      const { signedUrl } = await renderDocument(
+        {
+          templateId: 'invoice-default',
+          data: {
+            invoiceId: invoice.id,
+            invoice: {
+              number: invoice.metadata?.invoiceNumber ?? invoice.id,
+              date: invoice.date ?? new Date().toISOString().slice(0, 10),
+              dueDate: invoice.due_date ?? '',
+              currency: invoice.metadata?.currency ?? 'THB',
+            },
+            seller: {
+              name: localStorage.getItem('companyName') ?? 'Your Company',
+            },
+            client: {
+              name: invoice.client ?? 'Client',
+              email: invoice.metadata?.customerEmail ?? '',
+            },
+            items,
+            subtotal,
+            vatRate: 7,
+            vatAmount,
+            hasWht: false,
+            whtRate: 0,
+            whtAmount: 0,
+            total: Math.round((subtotal + vatAmount) * 100) / 100,
+            notes: '',
+            paymentTerms: 'กรุณาชำระภายในวันครบกำหนด / Please pay by due date',
+          },
+        },
+        accessToken
+      );
+
+      window.open(signedUrl, '_blank');
+    } catch (err: any) {
+      alert(`PDF generation failed: ${err.message}`);
+    } finally {
+      setDownloadingId(null);
+    }
   };
 
   const filteredInvoices = invoices.filter(inv => {
@@ -199,11 +215,14 @@ export default function Invoices() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => generatePDF(invoice)}
+                        onClick={() => downloadPDF(invoice)}
+                        disabled={downloadingId === invoice.id}
                         title="Download PDF"
                         className="text-slate-500 hover:text-primary dark:text-slate-400 dark:hover:text-primary"
                       >
-                        <Download className="w-4 h-4" />
+                        {downloadingId === invoice.id
+                          ? <Loader2 className="w-4 h-4 animate-spin" />
+                          : <Download className="w-4 h-4" />}
                       </Button>
                     </TableCell>
                   </TableRow>
