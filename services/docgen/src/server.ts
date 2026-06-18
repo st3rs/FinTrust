@@ -3,6 +3,7 @@ import express from "express";
 import { requireAuth } from "./middleware/auth.js";
 import renderRouter from "./routes/render.js";
 import documentsRouter from "./routes/documents.js";
+import qrRouter from "./routes/qr.js";
 
 const app = express();
 const PORT = Number(process.env["PORT"]) || 8080;
@@ -20,6 +21,7 @@ v1.use(requireAuth as express.RequestHandler);
 
 v1.use("/render", renderRouter);
 v1.use("/documents", documentsRouter);
+v1.use("/qr", qrRouter);
 
 app.use("/v1", v1);
 
