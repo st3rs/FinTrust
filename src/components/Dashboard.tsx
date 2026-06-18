@@ -10,7 +10,7 @@ import {
 import {
   FileText, Activity, Link as LinkIcon, Users, QrCode, Bitcoin,
   TrendingUp, TrendingDown, CheckCircle2, Clock, XCircle,
-  AlertTriangle, DollarSign
+  AlertTriangle, DollarSign, ArrowRight
 } from 'lucide-react';
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid,
@@ -312,6 +312,81 @@ function GatewayHealth() {
   );
 }
 
+// ─── Onboarding banner (shown on empty first-run dashboard) ───────────────
+
+const ONBOARDING_STEPS = [
+  {
+    step: 1,
+    title: 'เพิ่มข้อมูลธุรกิจของคุณ',
+    desc: 'ชื่อบริษัท ที่อยู่ และเลขผู้เสียภาษี จะปรากฏบนใบแจ้งหนี้',
+    to: '/settings',
+    cta: 'ไปที่ตั้งค่า',
+  },
+  {
+    step: 2,
+    title: 'เพิ่มลูกค้าคนแรก',
+    desc: 'บันทึกชื่อและอีเมลลูกค้าเพื่อใช้สร้างใบแจ้งหนี้ได้เร็วขึ้น',
+    to: '/clients',
+    cta: 'เพิ่มลูกค้า',
+  },
+  {
+    step: 3,
+    title: 'สร้างใบแจ้งหนี้แรก',
+    desc: 'ส่งใบแจ้งหนี้พร้อม PromptPay QR ให้ลูกค้าชำระเงินได้ทันที',
+    to: '/invoice/new',
+    cta: 'สร้างใบแจ้งหนี้',
+    primary: true,
+  },
+];
+
+function OnboardingBanner() {
+  return (
+    <Card className="border-primary/20 bg-primary/5 dark:bg-primary/10 overflow-hidden">
+      <CardHeader className="pb-3">
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-primary animate-pulse" aria-hidden />
+          <CardTitle className="text-base font-semibold">เริ่มต้นใช้งาน InvoicePro</CardTitle>
+        </div>
+        <p className="text-sm text-muted-foreground mt-1">
+          ทำตาม 3 ขั้นตอนนี้เพื่อส่งใบแจ้งหนี้แรกของคุณ
+        </p>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {ONBOARDING_STEPS.map(({ step, title, desc, to, cta, primary }) => (
+            <Link key={step} to={to} className="group block">
+              <div className={[
+                'rounded-lg border p-4 h-full transition-all duration-150',
+                'hover:shadow-sm hover:-translate-y-0.5',
+                primary
+                  ? 'bg-primary text-primary-foreground border-primary'
+                  : 'bg-background border-border hover:border-primary/30',
+              ].join(' ')}>
+                <div className={`text-xs font-bold mb-2 ${primary ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
+                  ขั้นตอนที่ {step}
+                </div>
+                <p className={`text-sm font-semibold mb-1 ${primary ? 'text-primary-foreground' : ''}`}>
+                  {title}
+                </p>
+                <p className={`text-xs leading-relaxed mb-3 ${primary ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>
+                  {desc}
+                </p>
+                <span className={[
+                  'inline-flex items-center gap-1 text-xs font-semibold',
+                  primary ? 'text-primary-foreground' : 'text-primary',
+                  'group-hover:gap-2 transition-all',
+                ].join(' ')}>
+                  {cta} <ArrowRight className="w-3 h-3" aria-hidden />
+                </span>
+              </div>
+            </Link>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
@@ -334,6 +409,8 @@ export default function Dashboard() {
   } = useDashboardMetrics();
 
   if (loading) return <DashboardSkeleton />;
+
+  const isEmptyDashboard = recentTransactions.length === 0 && activeCustomers === 0;
 
   const kpiCards: KPICardProps[] = [
     {
@@ -381,6 +458,13 @@ export default function Dashboard() {
           </div>
           <QuickActions />
         </motion.div>
+
+        {/* Onboarding — first-run only */}
+        {isEmptyDashboard && (
+          <motion.div variants={variants.item}>
+            <OnboardingBanner />
+          </motion.div>
+        )}
 
         {/* KPI Grid */}
         <motion.div

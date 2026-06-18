@@ -120,14 +120,14 @@ export default function Layout() {
     <div className="flex h-screen bg-surface-shell text-slate-900 font-sans overflow-hidden">
       {/* Mobile Sidebar Overlay */}
       {sidebarOpen && (
-        <div 
-          className="fixed inset-0 bg-black/50 z-20 lg:hidden" 
+        <div
+          className="fixed inset-0 bg-black/50 z-20 md:hidden"
           onClick={closeSidebar}
         />
       )}
 
       {/* Sidebar */}
-      <aside id="sidebar" className={`fixed inset-y-0 left-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col z-30 shrink-0 w-64 transform transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:block ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+      <aside id="sidebar" className={`fixed inset-y-0 left-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col z-30 shrink-0 w-64 transform transition-transform duration-300 ease-in-out md:translate-x-0 md:static md:block ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="p-6 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-primary text-primary-foreground rounded-md flex items-center justify-center font-bold text-xl select-none">
@@ -138,7 +138,7 @@ export default function Layout() {
               <h2 className="font-semibold text-xs leading-tight text-slate-500 dark:text-slate-400 truncate max-w-[140px]">{companyName}</h2>
             </div>
           </div>
-          <button aria-label="Close sidebar" className="lg:hidden text-slate-500 hover:text-slate-900 dark:hover:text-white" onClick={closeSidebar}>
+          <button aria-label="Close sidebar" className="md:hidden text-slate-500 hover:text-slate-900 dark:hover:text-white" onClick={closeSidebar}>
             <X className="w-6 h-6" />
           </button>
         </div>
@@ -241,12 +241,12 @@ export default function Layout() {
               aria-label="Open menu"
               aria-expanded={sidebarOpen}
               aria-controls="sidebar"
-              className="lg:hidden p-2 -ml-2 text-slate-500 hover:text-slate-900 dark:hover:text-white"
+              className="md:hidden p-2 -ml-2 text-slate-500 hover:text-slate-900 dark:hover:text-white"
               onClick={() => setSidebarOpen(true)}
             >
               <Menu className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
-            <h1 className="font-bold text-lg sm:text-xl tracking-tight hidden lg:block dark:text-white mr-4">FinTrust</h1>
+            <h1 className="font-bold text-lg sm:text-xl tracking-tight hidden md:block dark:text-white mr-4">FinTrust</h1>
             <div className="relative w-36 sm:w-48 md:w-64 lg:w-96 hidden sm:block">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input 
