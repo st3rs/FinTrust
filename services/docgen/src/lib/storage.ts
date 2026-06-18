@@ -1,6 +1,24 @@
 import { supabase } from "./supabase.js";
 
-const SIGNED_URL_TTL = 3600; // 1 hour in seconds
+// Signed-URL lifetime (seconds). Configurable via DOCGEN_SIGNED_URL_TTL so ops
+// can lengthen it for links emailed to clients without a code change. Defaults
+// to 1 hour; clamped to a sane [60s, 7d] range. NOTE: callers must always
+// re-mint a URL via GET /v1/documents/:id on demand — never cache or forward a
+// previously issued signedUrl. A longer TTL is a convenience, not a license to
+// store the URL.
+const DEFAULT_SIGNED_URL_TTL = 3600; // 1 hour
+const MIN_TTL = 60; // 1 minute
+const MAX_TTL = 7 * 24 * 3600; // 7 days
+
+function resolveTtl(): number {
+  const raw = process.env["DOCGEN_SIGNED_URL_TTL"];
+  if (!raw) return DEFAULT_SIGNED_URL_TTL;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return DEFAULT_SIGNED_URL_TTL;
+  return Math.min(MAX_TTL, Math.max(MIN_TTL, Math.floor(parsed)));
+}
+
+const SIGNED_URL_TTL = resolveTtl();
 
 export async function uploadPdf(
   storagePath: string,

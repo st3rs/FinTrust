@@ -3,14 +3,16 @@ version: "3.8"
 services:
   # ── Gotenberg 8 — Chromium-based PDF renderer ─────────────────────────────
   # Does NOT run on Vercel serverless. Must be a separate VPS container.
+  # Built from a custom image (services/docgen/gotenberg/Dockerfile) that bakes
+  # in the Sarabun Thai font, so PDF rendering needs no network at render time.
   gotenberg:
-    image: gotenberg/gotenberg:8
+    build:
+      context: ./services/docgen/gotenberg
+      dockerfile: Dockerfile
+    image: fintrust/gotenberg-thai:8
     ports:
       - "3001:3000"
     restart: unless-stopped
-    # Gotenberg has network access by default so the HTML template can load
-    # Google Fonts (Sarabun) from CDN. For air-gapped deployments, mount a
-    # local font directory and use a @font-face data URI in the template instead.
 
   # ── FinTrust docgen service ───────────────────────────────────────────────
   docgen:

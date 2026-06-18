@@ -1,13 +1,26 @@
 import { Router } from "express";
 import { supabase } from "../lib/supabase.js";
 import { getSignedUrl } from "../lib/storage.js";
+import { requireAccountScope, MissingAccountScopeError } from "../lib/accountScope.js";
 import type { AuthenticatedRequest, DocumentMetadata } from "../types.js";
 
 const router = Router();
 
-// GET /v1/documents/:id — returns metadata + fresh signed URL (1h expiry)
+// GET /v1/documents/:id — returns metadata + a freshly minted signed URL.
 router.get("/:id", async (req, res) => {
-  const { accountId } = req as unknown as AuthenticatedRequest;
+  // Tenant boundary: refuse any request without a usable account scope.
+  let accountId: string;
+  try {
+    accountId = requireAccountScope(
+      (req as unknown as AuthenticatedRequest).accountId
+    );
+  } catch (err) {
+    if (err instanceof MissingAccountScopeError) {
+      res.status(401).json({ error: "Unauthenticated" });
+      return;
+    }
+    throw err;
+  }
   const { id } = req.params;
 
   const { data, error } = await supabase

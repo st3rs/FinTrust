@@ -54,7 +54,27 @@ docker run --rm -p 3001:3000 gotenberg/gotenberg:8
 | `SUPABASE_URL` | **yes** | Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | **yes** | Service role key — server only, never expose |
 | `SUPABASE_STORAGE_BUCKET` | **yes** | Storage bucket name for PDFs (`documents`) |
-| `DOCGEN_API_KEYS_SALT` | **yes** | HMAC salt for hashing `ft_...` API keys |
+| `DOCGEN_API_KEYS_SALT` | **yes** | HMAC salt for hashing `ft_...` API keys — **immutable, see below** |
+| `DOCGEN_SIGNED_URL_TTL` | no (default 3600) | Signed-URL lifetime in seconds, clamped to [60, 604800] |
+| `GOTENBERG_WAIT_DELAY` | no | Extra Chromium wait (e.g. `1s`); leave unset — fonts are baked in |
+
+> ⚠️ **`DOCGEN_API_KEYS_SALT` is immutable once API keys are issued.** Every
+> `ft_` key is stored only as `HMAC-SHA256(salt, key)` in the `api_keys` table.
+> The plaintext key is shown once at creation and never recoverable. Changing the
+> salt re-derives a different hash for every key, so **all existing keys silently
+> stop validating (401)** with nothing in the logs to explain it. Rules:
+> - Set it **once**, identical in `services/docgen/.env` **and** the repo-root `.env`.
+> - Store it in your secret manager; treat it as permanent.
+> - "Rotating the salt" = re-issuing every API key. Build a key-reissue flow first.
+
+## Thai fonts
+
+Sarabun is **baked into the Gotenberg image** at build time
+(`services/docgen/gotenberg/Dockerfile`) and registered with fontconfig, so the
+PDF renderer resolves Thai text locally with **no network request**. The default
+template therefore has no Google Fonts `<link>` and `gotenberg.ts` sets no
+`waitDelay`. `docker compose up -d` builds this custom image automatically; set a
+real `GOOGLE_FONTS_SHA` in the Dockerfile (see its comments) before first build.
 
 ## Supabase setup (one-time)
 

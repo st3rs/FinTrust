@@ -5,26 +5,38 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ใบแจ้งหนี้ {{invoice.number}}</title>
   <!--
-    Sarabun is loaded from Google Fonts so Thai text renders correctly in
-    Gotenberg (Chromium). The waitDelay option in gotenberg.ts gives the font
-    time to load before capturing the PDF.
-    For air-gapped deployments, replace with a @font-face data URI.
+    Sarabun (Thai) is baked into the Gotenberg container at build time
+    (services/docgen/gotenberg/Dockerfile) and registered with fontconfig, so
+    Chromium resolves 'Sarabun' locally with no network request. There is
+    deliberately no Google Fonts <link> here — rendering must not depend on the
+    CDN being reachable at render time.
   -->
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link
-    href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap"
-    rel="stylesheet"
-  />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+    html {
+      /* Chromium (Gotenberg) drops background colors when printing to PDF
+         unless told to preserve them. Without this the navy header, the
+         tinted table head, and the status badges all render white. */
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
     body {
       font-family: 'Sarabun', 'TH Sarabun New', sans-serif;
-      font-size: 13px;
+      font-size: 14px;
       color: #1e293b;
       background: #fff;
       line-height: 1.6;
+    }
+
+    /* Financial figures align by column: tabular figures lock digit width so
+       amounts line up at the decimal. Applied to numeric cells only. */
+    .num, .qty, .price, .total,
+    .totals-table td:last-child,
+    .header-right td:last-child {
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum" 1;
     }
 
     .page {
@@ -104,7 +116,7 @@
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 1px;
-      color: #94a3b8;
+      color: #64748b;
       margin-bottom: 8px;
     }
 
@@ -117,7 +129,7 @@
 
     .client-block .client-meta {
       font-size: 12px;
-      color: #64748b;
+      color: #475569;
       line-height: 1.8;
     }
 
@@ -132,6 +144,11 @@
       border-collapse: collapse;
     }
 
+    /* Long invoices span pages: repeat the column header on every page and
+       never split a line item across a page break. */
+    .items-table thead { display: table-header-group; }
+    .items-table tbody tr { break-inside: avoid; }
+
     .items-table thead tr {
       background: #f1f5f9;
     }
@@ -142,7 +159,7 @@
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.5px;
-      color: #64748b;
+      color: #475569;
       text-align: left;
       border-bottom: 2px solid #e2e8f0;
     }
@@ -223,7 +240,7 @@
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 1px;
-      color: #94a3b8;
+      color: #64748b;
       margin-bottom: 10px;
     }
 
@@ -244,7 +261,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      color: #94a3b8;
+      color: #64748b;
       font-size: 11px;
       text-align: center;
     }
@@ -258,7 +275,7 @@
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 1px;
-      color: #94a3b8;
+      color: #64748b;
       margin-bottom: 8px;
     }
 
@@ -276,7 +293,7 @@
       border-top: 1px solid #e2e8f0;
       text-align: center;
       font-size: 11px;
-      color: #94a3b8;
+      color: #64748b;
     }
 
     .status-badge {

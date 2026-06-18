@@ -9,6 +9,7 @@ import { renderTemplate } from "../lib/template.js";
 import { htmlToPdf } from "../lib/gotenberg.js";
 import { uploadPdf, getSignedUrl } from "../lib/storage.js";
 import { supabase } from "../lib/supabase.js";
+import { requireAccountScope, MissingAccountScopeError } from "../lib/accountScope.js";
 
 const router = Router();
 
@@ -29,7 +30,21 @@ router.post("/", async (req, res) => {
   }
 
   const { templateId, data, format, options } = parsed.data;
-  const { accountId } = req as unknown as AuthenticatedRequest;
+
+  // Tenant boundary: docgen bypasses RLS, so refuse any request without a
+  // usable account scope before touching the database.
+  let accountId: string;
+  try {
+    accountId = requireAccountScope(
+      (req as unknown as AuthenticatedRequest).accountId
+    );
+  } catch (err) {
+    if (err instanceof MissingAccountScopeError) {
+      res.status(401).json({ error: "Unauthenticated" });
+      return;
+    }
+    throw err;
+  }
 
   // ── Load template body ────────────────────────────────────────────────────
   let templateBody: string;

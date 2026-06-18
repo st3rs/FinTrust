@@ -35,8 +35,11 @@ export async function htmlToPdf(
   form.append("marginRight", mmToInches(options?.marginRight ?? "15mm"));
   form.append("landscape", String(options?.landscape ?? false));
   form.append("scale", String(options?.scale ?? 1));
-  // Wait for network idle so Google Fonts (Sarabun) finish loading
-  form.append("waitDelay", "1s");
+  // No waitDelay: the Sarabun Thai font is baked into the Gotenberg image
+  // (services/docgen/gotenberg/Dockerfile), so there is no remote asset to wait
+  // for. An optional override remains for templates that DO load remote assets.
+  const waitDelay = process.env["GOTENBERG_WAIT_DELAY"];
+  if (waitDelay) form.append("waitDelay", waitDelay);
 
   const res = await fetch(
     `${gotenbergUrl}/forms/chromium/convert/html`,
