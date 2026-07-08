@@ -462,6 +462,61 @@ api.get("/gateways/stripe/status", async (req, res) => {
   res.json({ connected: Boolean(data), publishableKey: data?.publishable_key ?? null, environment: data?.environment ?? null, connectedAt: data?.updated_at ?? null });
 });
 
+// ── Crypto wallet gateway ─────────────────────────────────────────────────────
+
+api.post("/gateways/crypto/save", async (req, res) => {
+  const { userId } = req as unknown as AuthenticatedRequest;
+  const { wallets } = req.body as { wallets: Record<string, string> };
+  if (!wallets || typeof wallets !== "object") {
+    res.status(400).json({ error: "wallets object is required." });
+    return;
+  }
+
+  // Whitelist accepted coin keys
+  const allowed = ["usdt_trc20", "usdt_erc20", "btc", "eth", "bnb_bsc"];
+  const sanitized: Record<string, string> = {};
+  for (const key of allowed) {
+    const val = wallets[key];
+    if (typeof val === "string") sanitized[key] = val.trim();
+  }
+
+  const { error } = await supabaseAdmin.from("gateway_configs").upsert(
+    { user_id: userId, gateway: "crypto", config: sanitized, updated_at: new Date().toISOString() },
+    { onConflict: "user_id,gateway" }
+  );
+  if (error) {
+    res.status(500).json({ error: error.message });
+    return;
+  }
+  res.json({ saved: true, wallets: sanitized });
+});
+
+api.get("/gateways/crypto/status", async (req, res) => {
+  const { userId } = req as unknown as AuthenticatedRequest;
+  const { data } = await supabaseAdmin
+    .from("gateway_configs")
+    .select("config, updated_at")
+    .eq("user_id", userId)
+    .eq("gateway", "crypto")
+    .maybeSingle();
+  res.json({ wallets: (data?.config ?? {}) as Record<string, string>, updatedAt: data?.updated_at ?? null });
+});
+
+// Public: returns the invoice merchant's crypto wallets (no auth required)
+app.get("/api/public/crypto/wallets/:invoiceId", async (req, res) => {
+  const { invoiceId } = req.params;
+  const { data: inv } = await supabaseAdmin.from("invoices").select("user_id").eq("id", invoiceId).maybeSingle();
+  if (!inv?.user_id) { res.status(404).json({ error: "Invoice not found." }); return; }
+
+  const { data } = await supabaseAdmin
+    .from("gateway_configs")
+    .select("config")
+    .eq("user_id", inv.user_id)
+    .eq("gateway", "crypto")
+    .maybeSingle();
+  res.json({ wallets: (data?.config ?? {}) as Record<string, string> });
+});
+
 // Plan upgrade
 api.post("/plan/upgrade", async (req, res) => {
   if (!process.env.STRIPE_SECRET_KEY || !process.env.STRIPE_PRO_PRICE_ID) {

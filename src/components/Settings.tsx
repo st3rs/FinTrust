@@ -5,7 +5,16 @@ import { PLANS } from '../lib/plans';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { useLanguage } from './language-provider';
 import { useAuth } from '../lib/auth-context';
-import { Upload, Trash2, Image } from 'lucide-react';
+import { Upload, Trash2, Bitcoin, Copy, CheckCircle2 } from 'lucide-react';
+
+// Supported crypto coins — drives Settings UI and PaymentPage display
+export const CRYPTO_COINS = [
+  { key: 'usdt_trc20', label: 'USDT (TRC20)', network: 'Tron Network', symbol: 'USDT', color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-200', qrPrefix: 'tron:' },
+  { key: 'usdt_erc20', label: 'USDT (ERC20)', network: 'Ethereum Network', symbol: 'USDT', color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-200', qrPrefix: 'ethereum:' },
+  { key: 'btc',        label: 'Bitcoin (BTC)', network: 'Bitcoin Network',   symbol: 'BTC',  color: 'text-orange-500', bg: 'bg-orange-50', border: 'border-orange-200', qrPrefix: 'bitcoin:' },
+  { key: 'eth',        label: 'Ethereum (ETH)', network: 'Ethereum Network', symbol: 'ETH',  color: 'text-indigo-500', bg: 'bg-indigo-50', border: 'border-indigo-200', qrPrefix: 'ethereum:' },
+  { key: 'bnb_bsc',   label: 'BNB (BSC)',     network: 'BNB Smart Chain',   symbol: 'BNB',  color: 'text-yellow-600', bg: 'bg-yellow-50', border: 'border-yellow-200', qrPrefix: 'bnb:' },
+] as const;
 
 const translations = {
   en: {
@@ -95,6 +104,10 @@ export default function Settings() {
   const [stripeForm, setStripeForm] = useState({ publishableKey: '', secretKey: '', environment: 'live' });
   const [stripeConnecting, setStripeConnecting] = useState(false);
   const [stripeError, setStripeError] = useState('');
+  const [cryptoWallets, setCryptoWallets] = useState<Record<string, string>>({ usdt_trc20: '', usdt_erc20: '', btc: '', eth: '', bnb_bsc: '' });
+  const [cryptoSaving, setCryptoSaving] = useState(false);
+  const [cryptoSaved, setCryptoSaved] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [searchParams] = useSearchParams();
   const { language: lang, setLanguage: changeLanguage } = useLanguage();
   const { plan: currentPlan, planId, session } = useAuth();
@@ -112,6 +125,14 @@ export default function Settings() {
   useEffect(() => {
     fetch('/api/gateways/status').then(r => r.json()).then(setGatewayStatus).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!session?.access_token) return;
+    fetch('/api/gateways/crypto/status', { headers: { Authorization: `Bearer ${session.access_token}` } })
+      .then(r => r.json())
+      .then(d => setCryptoWallets(w => ({ ...w, ...d.wallets })))
+      .catch(() => {});
+  }, [session]);
 
   useEffect(() => {
     if (!session?.access_token) return;
@@ -224,6 +245,28 @@ export default function Settings() {
       };
       reader.readAsDataURL(file);
     }
+  };
+
+  const handleSaveCryptoWallets = async () => {
+    if (!session?.access_token) return;
+    setCryptoSaving(true);
+    try {
+      await fetch('/api/gateways/crypto/save', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wallets: cryptoWallets }),
+      });
+      setCryptoSaved(true);
+      setTimeout(() => setCryptoSaved(false), 3000);
+    } finally {
+      setCryptoSaving(false);
+    }
+  };
+
+  const handleCopyAddress = (key: string, address: string) => {
+    navigator.clipboard.writeText(address).catch(() => {});
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
   };
 
   const handleSavePromptPay = async () => {
@@ -762,6 +805,79 @@ export default function Settings() {
           </div>
         </div>
 
+      </div>
+
+      {/* ── Crypto Wallets Section ──────────────────────────────────────────── */}
+      <div className="mt-6 bg-white rounded-xl border border-slate-200 shadow-sm shadow-slate-200/50 p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded bg-orange-50 text-orange-500 flex items-center justify-center">
+              <Bitcoin className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-lg leading-tight">Crypto Wallets</h3>
+              <p className="text-sm text-slate-500">รับชำระด้วย Crypto — clients scan QR or copy address to pay directly to your wallet.</p>
+            </div>
+          </div>
+          {Object.values(cryptoWallets).some(v => v.trim()) ? (
+            <div className="bg-emerald-50 text-emerald-700 text-xs font-medium px-2 py-1 rounded-full flex items-center gap-1.5 self-start">
+              <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full" /> Active
+            </div>
+          ) : (
+            <div className="bg-slate-100 text-slate-500 text-xs font-medium px-2 py-1 rounded-full flex items-center gap-1.5 self-start">
+              <div className="w-1.5 h-1.5 bg-slate-400 rounded-full" /> Not Configured
+            </div>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+          {CRYPTO_COINS.map(coin => {
+            const address = cryptoWallets[coin.key] ?? '';
+            const hasAddress = address.trim().length > 0;
+            return (
+              <div key={coin.key} className={`border rounded-xl p-4 transition-colors ${hasAddress ? `${coin.border} ${coin.bg}` : 'border-slate-200 bg-slate-50/30'}`}>
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <p className={`text-sm font-bold ${hasAddress ? coin.color : 'text-slate-500'}`}>{coin.label}</p>
+                    <p className="text-[10px] text-slate-400">{coin.network}</p>
+                  </div>
+                  {hasAddress && (
+                    <button
+                      onClick={() => handleCopyAddress(coin.key, address)}
+                      className={`p-1.5 rounded-md transition-colors ${coin.bg} ${coin.color} hover:opacity-80`}
+                      title="Copy address"
+                    >
+                      {copiedKey === coin.key
+                        ? <CheckCircle2 className="w-4 h-4" />
+                        : <Copy className="w-4 h-4" />}
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  placeholder={`Enter ${coin.symbol} wallet address…`}
+                  value={address}
+                  onChange={e => setCryptoWallets(w => ({ ...w, [coin.key]: e.target.value }))}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all placeholder:font-sans placeholder:text-slate-400"
+                  spellCheck={false}
+                />
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center justify-between border-t border-slate-100 pt-5">
+          <p className="text-xs text-slate-400 max-w-sm">
+            Leave empty to hide a coin from the payment page. Addresses are stored server-side and shown to clients on the payment page.
+          </p>
+          <button
+            onClick={handleSaveCryptoWallets}
+            disabled={cryptoSaving}
+            className="bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-60 flex items-center gap-2 shrink-0"
+          >
+            {cryptoSaving ? 'Saving…' : cryptoSaved ? '✓ Saved!' : 'Save Wallets'}
+          </button>
+        </div>
       </div>
     </div>
   );

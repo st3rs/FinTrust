@@ -6,12 +6,13 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
-import { CreditCard, Wallet, QrCode, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
+import { CreditCard, Wallet, QrCode, CheckCircle2, Loader2, AlertCircle, Bitcoin, Copy } from 'lucide-react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import generatePayload from 'promptpay-qr';
 import QRCode from 'qrcode';
 import { loadScript } from '@paypal/paypal-js';
+import { CRYPTO_COINS } from './Settings';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -349,6 +350,182 @@ function PromptPayTab({
   );
 }
 
+// ─── Crypto tab ───────────────────────────────────────────────────────────────
+
+function CryptoTab({
+  invoice,
+  onSuccess,
+}: {
+  invoice: Invoice;
+  onSuccess: () => void;
+}) {
+  const [wallets, setWallets] = useState<Record<string, string>>({});
+  const [rates, setRates] = useState<Record<string, number>>({});
+  const [qrCodes, setQrCodes] = useState<Record<string, string>>({});
+  const [activeCoin, setActiveCoin] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  // Fetch merchant wallets from server using the invoice ID
+  useEffect(() => {
+    fetch(`/api/public/crypto/wallets/${invoice.id}`)
+      .then(r => r.json())
+      .then(d => {
+        const filled: Record<string, string> = {};
+        for (const [k, v] of Object.entries(d.wallets ?? {})) {
+          if (typeof v === 'string' && v.trim()) filled[k] = v.trim();
+        }
+        setWallets(filled);
+        const first = CRYPTO_COINS.find(c => filled[c.key]);
+        if (first) setActiveCoin(first.key);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [invoice.id]);
+
+  // Fetch live USD rates for BTC and ETH from CoinGecko (free, no key required)
+  useEffect(() => {
+    fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,binancecoin,tether&vs_currencies=usd')
+      .then(r => r.json())
+      .then(d => {
+        setRates({
+          btc: d.bitcoin?.usd ?? 0,
+          eth: d.ethereum?.usd ?? 0,
+          bnb_bsc: d.binancecoin?.usd ?? 0,
+          usdt_trc20: d.tether?.usd ?? 1,
+          usdt_erc20: d.tether?.usd ?? 1,
+        });
+      })
+      .catch(() => {});
+  }, []);
+
+  // Build QR code data URLs whenever wallets or active coin changes
+  useEffect(() => {
+    const coin = CRYPTO_COINS.find(c => c.key === activeCoin);
+    if (!coin || !wallets[coin.key]) return;
+    const qrData = `${coin.qrPrefix}${wallets[coin.key]}`;
+    QRCode.toDataURL(qrData, { width: 200, margin: 2, color: { dark: '#0f172a', light: '#ffffff' } })
+      .then(url => setQrCodes(prev => ({ ...prev, [coin.key]: url })))
+      .catch(() => {});
+  }, [activeCoin, wallets]);
+
+  const handleCopy = (address: string) => {
+    navigator.clipboard.writeText(address).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const cryptoAmount = (coinKey: string): string => {
+    const rate = rates[coinKey];
+    if (!rate || !invoice.amount) return '—';
+    const amount = invoice.amount / rate;
+    if (coinKey === 'btc') return amount.toFixed(6);
+    if (coinKey === 'eth') return amount.toFixed(4);
+    return amount.toFixed(2);
+  };
+
+  const activeCoinInfo = CRYPTO_COINS.find(c => c.key === activeCoin);
+  const activeAddress = activeCoin ? wallets[activeCoin] : '';
+  const activeQr = activeCoin ? qrCodes[activeCoin] : '';
+
+  const availableCoins = CRYPTO_COINS.filter(c => wallets[c.key]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-10 text-muted-foreground gap-2 text-sm">
+        <Loader2 className="w-4 h-4 animate-spin" /> Loading wallets…
+      </div>
+    );
+  }
+
+  if (availableCoins.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-8 text-center gap-3">
+        <Bitcoin className="w-8 h-8 text-muted-foreground opacity-40" />
+        <p className="text-sm text-muted-foreground">
+          Merchant has not configured any crypto wallet addresses yet.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Coin selector */}
+      <div className="flex flex-wrap gap-2">
+        {availableCoins.map(coin => (
+          <button
+            key={coin.key}
+            onClick={() => setActiveCoin(coin.key)}
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${
+              activeCoin === coin.key
+                ? `${coin.border} ${coin.bg} ${coin.color}`
+                : 'border-slate-200 text-slate-500 hover:border-slate-300'
+            }`}
+          >
+            {coin.label}
+          </button>
+        ))}
+      </div>
+
+      {activeCoinInfo && activeAddress && (
+        <div className="flex flex-col items-center gap-4">
+          {/* Amount in crypto */}
+          <div className="text-center">
+            <p className="text-xs text-muted-foreground mb-0.5">Send exactly</p>
+            <p className={`text-xl font-bold ${activeCoinInfo.color}`}>
+              {cryptoAmount(activeCoin!)} {activeCoinInfo.symbol}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              ≈ {invoice.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })} {invoice.currency}
+            </p>
+          </div>
+
+          {/* QR code */}
+          <div className="bg-white p-3 rounded-xl shadow-sm border border-slate-200">
+            {activeQr ? (
+              <img src={activeQr} alt={`${activeCoinInfo.label} QR`} className="w-[180px] h-[180px] rounded" />
+            ) : (
+              <div className="w-[180px] h-[180px] flex items-center justify-center text-muted-foreground">
+                <Loader2 className="w-6 h-6 animate-spin" />
+              </div>
+            )}
+          </div>
+
+          {/* Address + copy */}
+          <div className="w-full bg-slate-50 rounded-lg border border-slate-200 p-3">
+            <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+              {activeCoinInfo.network} address
+            </p>
+            <div className="flex items-center gap-2">
+              <p className="text-xs font-mono text-slate-700 break-all flex-1">{activeAddress}</p>
+              <button
+                onClick={() => handleCopy(activeAddress)}
+                className={`shrink-0 p-2 rounded-lg transition-colors ${
+                  copied
+                    ? 'bg-emerald-100 text-emerald-600'
+                    : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                }`}
+                title="Copy address"
+              >
+                {copied ? <CheckCircle2 className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          <p className="text-[11px] text-muted-foreground text-center max-w-[260px]">
+            Send the exact amount to this address. Notify the merchant after sending.
+          </p>
+
+          <Button variant="ghost" size="sm" className="w-full" onClick={onSuccess}>
+            I've sent the payment — confirm manually
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function PaymentPage() {
@@ -531,15 +708,18 @@ export default function PaymentPage() {
                   </CardHeader>
                   <CardContent>
                     <Tabs defaultValue="card" className="w-full">
-                      <TabsList className="grid w-full grid-cols-3 mb-6">
-                        <TabsTrigger value="card" className="gap-1.5">
+                      <TabsList className="grid w-full grid-cols-4 mb-6">
+                        <TabsTrigger value="card" className="gap-1 text-xs">
                           <CreditCard className="w-3.5 h-3.5" /> Card
                         </TabsTrigger>
-                        <TabsTrigger value="paypal" className="gap-1.5">
+                        <TabsTrigger value="paypal" className="gap-1 text-xs">
                           <Wallet className="w-3.5 h-3.5" /> PayPal
                         </TabsTrigger>
-                        <TabsTrigger value="promptpay" className="gap-1.5">
+                        <TabsTrigger value="promptpay" className="gap-1 text-xs">
                           <QrCode className="w-3.5 h-3.5" /> PromptPay
+                        </TabsTrigger>
+                        <TabsTrigger value="crypto" className="gap-1 text-xs">
+                          <Bitcoin className="w-3.5 h-3.5" /> Crypto
                         </TabsTrigger>
                       </TabsList>
 
@@ -560,6 +740,13 @@ export default function PaymentPage() {
 
                       <TabsContent value="promptpay">
                         <PromptPayTab
+                          invoice={invoice}
+                          onSuccess={handleSuccess}
+                        />
+                      </TabsContent>
+
+                      <TabsContent value="crypto">
+                        <CryptoTab
                           invoice={invoice}
                           onSuccess={handleSuccess}
                         />
