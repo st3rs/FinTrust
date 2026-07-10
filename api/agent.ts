@@ -1,13 +1,13 @@
 /**
  * FinTrust AI Consultant Agent
  *
- * Agentic loop powered by Claude (tool-use pattern).
+ * Agentic loop powered by OpenAI (function calling pattern).
  * Tools read from Supabase scoped to the authenticated user — no cross-tenant leakage.
  *
  * Entry point: runAgentChat()
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { supabaseAdmin } from "../lib/supabase.js";
 
 // ---------------------------------------------------------------------------
@@ -25,118 +25,136 @@ export interface AgentResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Anthropic client (lazy-init so missing key throws at call time, not import)
+// OpenAI client (lazy-init so missing key throws at call time, not import)
 // ---------------------------------------------------------------------------
 
-function getClient(): Anthropic {
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) throw new Error("ANTHROPIC_API_KEY is not set");
-  return new Anthropic({ apiKey: key });
+function getClient(): OpenAI {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) throw new Error("OPENAI_API_KEY is not set");
+  return new OpenAI({ apiKey: key });
 }
 
 // ---------------------------------------------------------------------------
-// Tool definitions (what Claude can call)
+// Tool definitions (OpenAI function calling format)
 // ---------------------------------------------------------------------------
 
-const TOOLS: Anthropic.Tool[] = [
+const TOOLS: OpenAI.Chat.ChatCompletionTool[] = [
   {
-    name: "get_invoices",
-    description:
-      "List invoices for the user. Can filter by status and/or client name. Returns up to 20 most recent.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        status: {
-          type: "string",
-          enum: ["DRAFT", "UNPAID", "PAID", "VOID"],
-          description: "Filter by invoice status. Omit to get all.",
+    type: "function",
+    function: {
+      name: "get_invoices",
+      description:
+        "List invoices for the user. Can filter by status and/or client name. Returns up to 20 most recent.",
+      parameters: {
+        type: "object",
+        properties: {
+          status: {
+            type: "string",
+            enum: ["DRAFT", "UNPAID", "PAID", "VOID"],
+            description: "Filter by invoice status. Omit to get all.",
+          },
+          client: {
+            type: "string",
+            description: "Filter by client name (partial match).",
+          },
+          limit: {
+            type: "number",
+            description: "Max results (1-20). Defaults to 10.",
+          },
         },
-        client: {
-          type: "string",
-          description: "Filter by client name (partial match).",
-        },
-        limit: {
-          type: "number",
-          description: "Max results (1-20). Defaults to 10.",
-        },
+        required: [],
       },
-      required: [],
     },
   },
   {
-    name: "get_invoice_detail",
-    description: "Get full details of a single invoice by its ID.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        invoice_id: {
-          type: "string",
-          description: "UUID of the invoice.",
+    type: "function",
+    function: {
+      name: "get_invoice_detail",
+      description: "Get full details of a single invoice by its ID.",
+      parameters: {
+        type: "object",
+        properties: {
+          invoice_id: {
+            type: "string",
+            description: "UUID of the invoice.",
+          },
         },
+        required: ["invoice_id"],
       },
-      required: ["invoice_id"],
     },
   },
   {
-    name: "get_clients",
-    description:
-      "List clients/customers for the user. Returns name, email, total billed, and last invoice date.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        limit: {
-          type: "number",
-          description: "Max results (1-20). Defaults to 10.",
+    type: "function",
+    function: {
+      name: "get_clients",
+      description:
+        "List clients/customers for the user. Returns name, email, total billed, and last invoice date.",
+      parameters: {
+        type: "object",
+        properties: {
+          limit: {
+            type: "number",
+            description: "Max results (1-20). Defaults to 10.",
+          },
         },
+        required: [],
       },
-      required: [],
     },
   },
   {
-    name: "get_cash_flow_summary",
-    description:
-      "Summarize revenue: total paid, total unpaid, total overdue, and count per status. Useful for financial overview questions.",
-    input_schema: {
-      type: "object" as const,
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: "get_overdue_invoices",
-    description:
-      "Return all UNPAID invoices whose due_date is in the past. Sorted by oldest due date first.",
-    input_schema: {
-      type: "object" as const,
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: "draft_reminder_email",
-    description:
-      "Draft a polite payment reminder email for a specific invoice. Returns subject + body copy ready to send.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        invoice_id: {
-          type: "string",
-          description: "UUID of the overdue invoice.",
-        },
-        tone: {
-          type: "string",
-          enum: ["friendly", "firm", "final"],
-          description:
-            "Tone of the reminder. 'friendly' for first reminder, 'firm' for second, 'final' for last notice.",
-        },
+    type: "function",
+    function: {
+      name: "get_cash_flow_summary",
+      description:
+        "Summarize revenue: total paid, total unpaid, total overdue, and count per status. Useful for financial overview questions.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: [],
       },
-      required: ["invoice_id", "tone"],
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_overdue_invoices",
+      description:
+        "Return all UNPAID invoices whose due_date is in the past. Sorted by oldest due date first.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "draft_reminder_email",
+      description:
+        "Draft a polite payment reminder email for a specific invoice. Returns subject + body copy ready to send.",
+      parameters: {
+        type: "object",
+        properties: {
+          invoice_id: {
+            type: "string",
+            description: "UUID of the overdue invoice.",
+          },
+          tone: {
+            type: "string",
+            enum: ["friendly", "firm", "final"],
+            description:
+              "Tone of the reminder. 'friendly' for first reminder, 'firm' for second, 'final' for last notice.",
+          },
+        },
+        required: ["invoice_id", "tone"],
+      },
     },
   },
 ];
 
 // ---------------------------------------------------------------------------
-// Tool executor — runs the tool Claude chose and returns a result string
+// Tool executor — runs the tool the model chose and returns a result string
 // ---------------------------------------------------------------------------
 
 async function executeTool(
@@ -170,7 +188,7 @@ async function executeTool(
         .eq("user_id", userId)
         .single();
 
-      if (error || !data) return `Invoice not found or access denied.`;
+      if (error || !data) return "Invoice not found or access denied.";
       return JSON.stringify(data, null, 2);
     }
 
@@ -228,7 +246,6 @@ async function executeTool(
     }
 
     case "draft_reminder_email": {
-      // Fetch invoice data first so the email can be specific
       const { data: inv, error } = await supabaseAdmin
         .from("invoices")
         .select("id, client, amount, due_date, metadata")
@@ -251,8 +268,7 @@ async function executeTool(
         },
         firm: {
           greeting: "This is a follow-up regarding an outstanding balance.",
-          closing:
-            "Please arrange payment at your earliest convenience to avoid further action.",
+          closing: "Please arrange payment at your earliest convenience to avoid further action.",
         },
         final: {
           greeting: "This is a final notice regarding a seriously overdue payment.",
@@ -262,7 +278,6 @@ async function executeTool(
       };
 
       const t = toneMap[tone] ?? toneMap.friendly;
-
       const subject = `${tone === "final" ? "FINAL NOTICE: " : ""}Payment Reminder — ${invNum}`;
       const body = `Dear ${inv.client},
 
@@ -270,7 +285,7 @@ ${t.greeting}
 
 We wanted to remind you that invoice **${invNum}** for **${currency} ${Number(inv.amount).toLocaleString()}** was due on **${inv.due_date}** and remains unpaid.
 
-Please process payment at your earliest convenience. You can reach us at ${email} if you have any questions about this invoice.
+Please process payment at your earliest convenience.
 
 ${t.closing}
 
@@ -286,7 +301,7 @@ InvoicePro / FinTrust Team`;
 }
 
 // ---------------------------------------------------------------------------
-// System prompt — shapes the agent's persona
+// System prompt
 // ---------------------------------------------------------------------------
 
 const SYSTEM_PROMPT = `You are FinTrust AI, an intelligent financial consultant and assistant embedded inside the InvoicePro Dashboard.
@@ -297,13 +312,13 @@ Your role:
 - Draft professional payment reminder emails
 - Give practical, actionable financial advice based on the user's real data
 
-You have access to the user's live invoice and client data through tools. Always fetch real data before answering questions about specific amounts, clients, or dates — never guess or fabricate numbers.
+You have access to the user's live invoice and client data through tools. Always fetch real data before answering — never guess or fabricate numbers.
 
 Guidelines:
 - Be concise, professional, and friendly
 - Format currency clearly (e.g., "THB 15,000" or "USD 1,540")
 - When you spot overdue invoices, proactively mention them
-- If asked to send emails, clarify that you can draft them but the user must send them manually (Phase 1)
+- If asked to send emails, clarify that you can draft them but the user must send them manually
 - Respond in the same language the user writes in (Thai or English)`;
 
 // ---------------------------------------------------------------------------
@@ -317,62 +332,52 @@ export async function runAgentChat(
   const client = getClient();
   const toolsUsed: string[] = [];
 
-  // Convert our simple message format to Anthropic's format
-  const claudeMessages: Anthropic.MessageParam[] = messages.map((m) => ({
-    role: m.role,
-    content: m.content,
-  }));
+  const chatMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+    { role: "system", content: SYSTEM_PROMPT },
+    ...messages.map((m) => ({ role: m.role, content: m.content } as OpenAI.Chat.ChatCompletionMessageParam)),
+  ];
 
-  // Agentic loop — runs until Claude stops calling tools
+  // Agentic loop — runs until the model stops calling tools
   for (let iteration = 0; iteration < 10; iteration++) {
-    const response = await client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 2048,
-      system: SYSTEM_PROMPT,
+    const response = await client.chat.completions.create({
+      model: "gpt-4o",
+      messages: chatMessages,
       tools: TOOLS,
-      messages: claudeMessages,
+      tool_choice: "auto",
     });
 
-    // If Claude is done (no tool calls), return its final text
-    if (response.stop_reason === "end_turn") {
-      const text = response.content
-        .filter((b): b is Anthropic.TextBlock => b.type === "text")
-        .map((b) => b.text)
-        .join("\n");
-      return { reply: text, toolsUsed };
+    const choice = response.choices[0];
+
+    // Model is done — return final text
+    if (choice.finish_reason === "stop") {
+      return {
+        reply: choice.message.content ?? "",
+        toolsUsed,
+      };
     }
 
-    // Process tool calls
-    if (response.stop_reason === "tool_use") {
-      // Add Claude's response (with tool_use blocks) to history
-      claudeMessages.push({ role: "assistant", content: response.content });
+    // Model wants to call tools
+    if (choice.finish_reason === "tool_calls") {
+      const assistantMsg = choice.message;
+      chatMessages.push(assistantMsg);
 
-      // Execute each tool call and collect results
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
+      // Execute each tool call
+      for (const toolCall of assistantMsg.tool_calls ?? []) {
+        toolsUsed.push(toolCall.function.name);
 
-      for (const block of response.content) {
-        if (block.type !== "tool_use") continue;
+        const input = JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
+        const result = await executeTool(toolCall.function.name, input, userId);
 
-        toolsUsed.push(block.name);
-        const result = await executeTool(
-          block.name,
-          block.input as Record<string, unknown>,
-          userId
-        );
-
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: block.id,
+        chatMessages.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
           content: result,
         });
       }
 
-      // Feed results back for the next iteration
-      claudeMessages.push({ role: "user", content: toolResults });
       continue;
     }
 
-    // Unexpected stop reason — bail out
     break;
   }
 
