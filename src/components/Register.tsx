@@ -22,19 +22,27 @@ export default function Register() {
     e.preventDefault();
     setError('');
     setSuccessMsg('');
+
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters.');
+      return;
+    }
+
     setIsLoading(true);
 
     try {
+      const siteUrl = import.meta.env.VITE_APP_URL ?? window.location.origin;
       const { data, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
         options: {
+          emailRedirectTo: `${siteUrl}/dashboard`,
           data: {
             first_name: firstName,
             last_name: lastName,
             company_name: company || 'FinTrust Member Entity',
-          }
-        }
+          },
+        },
       });
 
       if (signUpError) {
@@ -43,9 +51,6 @@ export default function Register() {
 
       // Check if user is created and if session is active or confirmation is pending
       if (data?.session) {
-        localStorage.setItem('isAuthenticated', 'true');
-        localStorage.setItem('authMethod', 'email');
-        localStorage.setItem('companyName', company || 'FinTrust Member Entity');
         navigate('/dashboard');
       } else {
         setSuccessMsg('Registration successful! Please check your inbox for an email verification link.');

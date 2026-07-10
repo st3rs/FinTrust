@@ -40,8 +40,6 @@ export default function Login() {
       }
 
       if (data?.session) {
-        localStorage.setItem('isAuthenticated', 'true');
-        localStorage.setItem('authMethod', 'email');
         navigate('/dashboard');
       }
     } catch (err: any) {

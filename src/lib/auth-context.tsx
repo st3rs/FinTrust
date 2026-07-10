@@ -24,31 +24,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
-  const [companyName, setCompanyName] = useState('FinTrust Corp.');
-  const [firstName, setFirstName] = useState('John');
-  const [lastName, setLastName] = useState('Doe');
+  const [companyName, setCompanyName] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(null);
   const [planId, setPlanId] = useState<PlanId>('free');
 
   useEffect(() => {
-    // 1. Get initial session
-    supabase.auth.getSession()
-      .then(({ data: { session } }) => {
-        setSession(session);
-        const currentUser = session?.user ?? null;
-        setUser(currentUser);
-        
-        if (currentUser) {
-          parseUserMetadata(currentUser);
-        }
-        setLoading(false);
-      })
-      .catch((err) => {
-        console.warn('Failed to fetch initial session:', err);
-        setLoading(false);
-      });
-
-    // 2. Listen for auth changes
+    // onAuthStateChange fires INITIAL_SESSION immediately on subscribe —
+    // using getSession() separately causes a double-init race condition.
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       const currentUser = session?.user ?? null;
@@ -57,11 +41,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (currentUser) {
         parseUserMetadata(currentUser);
       } else {
-        // Reset state on sign out
-        setCompanyName('FinTrust Corp.');
-        setFirstName('John');
-        setLastName('Doe');
+        setCompanyName('');
+        setFirstName('');
+        setLastName('');
         setTrialDaysLeft(null);
+        setPlanId('free');
       }
       setLoading(false);
     });

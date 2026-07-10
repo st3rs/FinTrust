@@ -35,6 +35,7 @@ import { ModeToggle } from './theme-toggle';
 import { LanguageToggle } from './language-toggle';
 import { useLanguage } from './language-provider';
 import { useAuth } from '../lib/auth-context';
+import AgentChat from './AgentChat';
 
 const translations = {
   en: {
@@ -339,6 +340,9 @@ export default function Layout() {
           <Outlet />
         </main>
       </div>
+
+      {/* AI Consultant — floats over all pages */}
+      <AgentChat />
     </div>
   );
 }

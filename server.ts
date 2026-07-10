@@ -8,6 +8,7 @@ import Stripe from "stripe";
 import rateLimit from "express-rate-limit";
 import { supabaseAdmin, createUserClient } from "./lib/supabase.js";
 import { requireAuth, requireAdmin, type AuthenticatedRequest } from "./middleware/auth.js";
+import { runAgentChat, type AgentMessage } from "./api/agent.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1371,6 +1372,63 @@ async function startServer() {
   });
 
   app.use("/api/admin", adminApi);
+
+  // ---------------------------------------------------------------------------
+  // AI Agent — /api/agent/chat
+  // ---------------------------------------------------------------------------
+
+  const agentLimiter = rateLimit({
+    windowMs: 60_000,
+    max: 20, // 20 messages/min per IP — generous for a chat UI
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Agent rate limit reached. Please wait a moment." },
+  });
+
+  app.post(
+    "/api/agent/chat",
+    agentLimiter,
+    requireAuth,
+    async (req: AuthenticatedRequest, res) => {
+      const userId = req.userId;
+      if (!userId) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+
+      const { messages } = req.body as { messages?: AgentMessage[] };
+
+      if (!Array.isArray(messages) || messages.length === 0) {
+        res.status(400).json({ error: "messages array is required" });
+        return;
+      }
+
+      // Basic shape validation — no zod dep here, keep it simple
+      const valid = messages.every(
+        (m) =>
+          (m.role === "user" || m.role === "assistant") &&
+          typeof m.content === "string"
+      );
+      if (!valid) {
+        res
+          .status(400)
+          .json({ error: "Each message must have role (user|assistant) and content (string)" });
+        return;
+      }
+
+      try {
+        const result = await runAgentChat(messages, userId);
+        addLog("api_request", `Agent chat — tools used: ${result.toolsUsed.join(", ") || "none"}`, {
+          userId,
+        });
+        res.json(result);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "Agent error";
+        console.error("[agent]", err);
+        res.status(500).json({ error: msg });
+      }
+    }
+  );
 
   // ---------------------------------------------------------------------------
   // Static / Vite middleware
