@@ -17,6 +17,7 @@ import Stripe from "stripe";
 import rateLimit from "express-rate-limit";
 import { supabaseAdmin } from "../lib/supabase.js";
 import { requireAuth, requireAdmin, type AuthenticatedRequest } from "../middleware/auth.js";
+import { runAgentChat, type AgentMessage } from "./agent.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -530,6 +531,49 @@ api.post("/plan/upgrade", async (req, res) => {
 });
 
 app.use("/api", api);
+
+// ─── AI Agent ─────────────────────────────────────────────────────────────────
+
+const agentLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Agent rate limit reached. Please wait a moment." },
+});
+
+app.post(
+  "/api/agent/chat",
+  agentLimiter,
+  requireAuth as express.RequestHandler,
+  async (req, res) => {
+    const { userId } = req as AuthenticatedRequest;
+    if (!userId) { res.status(401).json({ error: "Unauthorized" }); return; }
+
+    const { messages } = req.body as { messages?: AgentMessage[] };
+    if (!Array.isArray(messages) || messages.length === 0) {
+      res.status(400).json({ error: "messages array is required" });
+      return;
+    }
+
+    const valid = messages.every(
+      (m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string"
+    );
+    if (!valid) {
+      res.status(400).json({ error: "Each message must have role (user|assistant) and content (string)" });
+      return;
+    }
+
+    try {
+      const result = await runAgentChat(messages, userId);
+      res.json(result);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Agent error";
+      console.error("[agent]", err);
+      res.status(500).json({ error: msg });
+    }
+  }
+);
 
 // ─── Super Admin routes ───────────────────────────────────────────────────────
 
