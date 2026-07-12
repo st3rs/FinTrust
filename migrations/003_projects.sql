@@ -5,6 +5,15 @@
 -- Run AFTER 002_docgen.sql
 -- ============================================================
 
+-- ── shared trigger function (idempotent, safe to re-run) ─────
+create or replace function set_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
 -- ── projects ─────────────────────────────────────────────────
 -- Each account can own multiple projects (e.g. "Production", "Staging").
 -- API keys are scoped to a project. Users must create at least one
