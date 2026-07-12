@@ -54,6 +54,35 @@ async function fetchInvoice(id: string): Promise<Invoice | null> {
   return null;
 }
 
+// Reusable payment link → mapped into the same Invoice shape the page renders.
+interface LinkMethods { stripe?: boolean; paypal?: boolean; promptpay?: boolean; crypto?: boolean }
+
+async function fetchPaymentLink(id: string): Promise<{ invoice: Invoice; methods: LinkMethods } | null> {
+  try {
+    const r = await fetch(`/api/public/payment-links/${id}`);
+    if (!r.ok) return null;
+    const { data } = await r.json();
+    if (!data) return null;
+    return {
+      invoice: {
+        id: data.id,
+        invoiceNumber: data.title,
+        amount: Number(data.amount) || 0,
+        currency: data.currency ?? 'USD',
+        status: 'UNPAID',
+        customerName: '—',
+        customerEmail: '',
+        dueDate: data.created_at ?? new Date().toISOString(),
+        createdAt: data.created_at ?? new Date().toISOString(),
+        items: [{ description: data.description || data.title, quantity: 1, price: Number(data.amount) || 0 }],
+      },
+      methods: (data.methods ?? { stripe: true }) as LinkMethods,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ─── Stripe checkout tab ─────────────────────────────────────────────────────
 
 function StripeTab({
@@ -534,30 +563,52 @@ export default function PaymentPage() {
   const [searchParams] = useSearchParams();
 
   const [invoice, setInvoice] = useState<Invoice | null>(null);
+  const [linkMethods, setLinkMethods] = useState<LinkMethods | null>(null); // non-null → payment link
   const [loading, setLoading] = useState(true);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus | null>(null);
 
-  // ── Load invoice ────────────────────────────────────────────────────────────
+  // ── Load invoice (or payment link) ──────────────────────────────────────────
   useEffect(() => {
     if (!id) return;
     let active = true;
     setLoading(true);
 
-    fetchInvoice(id).then((inv) => {
+    fetchInvoice(id).then(async (inv) => {
       if (!active) return;
-      setInvoice(inv);
-      if (inv?.status === 'PAID') setPaymentSuccess(true);
+      if (inv) {
+        setInvoice(inv);
+        if (inv.status === 'PAID') setPaymentSuccess(true);
+        setLoading(false);
+        return;
+      }
+      // Not an invoice — try reusable payment link
+      const link = await fetchPaymentLink(id);
+      if (!active) return;
+      if (link) {
+        setInvoice(link.invoice);
+        setLinkMethods(link.methods);
+      }
       setLoading(false);
     });
 
     return () => { active = false; };
   }, [id]);
 
+  // ── Payment link + Stripe redirect-back: success is immediate ───────────────
+  // Links are reusable (no PAID status to poll); Stripe only redirects with
+  // ?stripe=success after the charge succeeded.
+  useEffect(() => {
+    if (searchParams.get('stripe') === 'success' && searchParams.get('link') === '1') {
+      setPaymentSuccess(true);
+    }
+  }, [searchParams]);
+
   // ── Handle Stripe redirect-back ─────────────────────────────────────────────
   // After Stripe checkout, the URL has ?stripe=success. Poll until DB reflects PAID.
   useEffect(() => {
     if (searchParams.get('stripe') !== 'success' || !id) return;
+    if (searchParams.get('link') === '1') return; // payment link — handled above
 
     let attempts = 0;
     const poll = setInterval(async () => {
@@ -707,20 +758,40 @@ export default function PaymentPage() {
                     <CardDescription>Secure, encrypted payment.</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <Tabs defaultValue="card" className="w-full">
-                      <TabsList className="grid w-full grid-cols-4 mb-6">
+                    {(() => {
+                      // Payment links only show the methods selected at creation;
+                      // invoices keep all four tabs.
+                      const show = {
+                        card: linkMethods ? Boolean(linkMethods.stripe) : true,
+                        paypal: linkMethods ? Boolean(linkMethods.paypal) : true,
+                        promptpay: linkMethods ? Boolean(linkMethods.promptpay) : true,
+                        crypto: linkMethods ? Boolean(linkMethods.crypto) : true,
+                      };
+                      const enabled = (Object.keys(show) as (keyof typeof show)[]).filter(k => show[k]);
+                      const defaultTab = enabled[0] ?? 'card';
+                      return (
+                    <Tabs defaultValue={defaultTab} className="w-full">
+                      <TabsList className={`grid w-full mb-6 ${['', 'grid-cols-1', 'grid-cols-2', 'grid-cols-3', 'grid-cols-4'][enabled.length] ?? 'grid-cols-4'}`}>
+                        {show.card && (
                         <TabsTrigger value="card" className="gap-1 text-xs">
                           <CreditCard className="w-3.5 h-3.5" /> Card
                         </TabsTrigger>
+                        )}
+                        {show.paypal && (
                         <TabsTrigger value="paypal" className="gap-1 text-xs">
                           <Wallet className="w-3.5 h-3.5" /> PayPal
                         </TabsTrigger>
+                        )}
+                        {show.promptpay && (
                         <TabsTrigger value="promptpay" className="gap-1 text-xs">
                           <QrCode className="w-3.5 h-3.5" /> PromptPay
                         </TabsTrigger>
+                        )}
+                        {show.crypto && (
                         <TabsTrigger value="crypto" className="gap-1 text-xs">
                           <Bitcoin className="w-3.5 h-3.5" /> Crypto
                         </TabsTrigger>
+                        )}
                       </TabsList>
 
                       <TabsContent value="card">
@@ -752,6 +823,8 @@ export default function PaymentPage() {
                         />
                       </TabsContent>
                     </Tabs>
+                      );
+                    })()}
                   </CardContent>
                   <CardFooter className="justify-center text-xs text-muted-foreground border-t pt-4">
                     🔒 Payments secured by Stripe & PayPal infrastructure

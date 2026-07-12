@@ -146,6 +146,28 @@ export default function PaymentLinks() {
     navigator.clipboard.writeText(url);
   };
 
+  async function handleToggleActive(link: any) {
+    if (!session) return;
+    const res = await fetch(`/api/payment-links/${link.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ is_active: !link.is_active }),
+    });
+    if (res.ok) await fetchLinks();
+    else alert((await res.json().catch(() => ({}))).error ?? 'Update failed');
+  }
+
+  async function handleDelete(link: any) {
+    if (!session) return;
+    if (!confirm(`Delete "${link.title}"? Anyone holding this link will no longer be able to pay.`)) return;
+    const res = await fetch(`/api/payment-links/${link.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    if (res.ok) await fetchLinks();
+    else alert((await res.json().catch(() => ({}))).error ?? 'Delete failed');
+  }
+
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full space-y-6 pb-20">
       
@@ -323,8 +345,10 @@ export default function PaymentLinks() {
                             </DropdownMenuGroup>
                             <DropdownMenuSeparator />
                             <DropdownMenuGroup>
-                              <DropdownMenuItem className="cursor-pointer text-amber-600">Disable Link</DropdownMenuItem>
-                              <DropdownMenuItem className="cursor-pointer text-red-600">Delete</DropdownMenuItem>
+                              <DropdownMenuItem className="cursor-pointer text-amber-600" onClick={() => handleToggleActive(link)}>
+                                {link.is_active ? 'Disable Link' : 'Enable Link'}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem className="cursor-pointer text-red-600" onClick={() => handleDelete(link)}>Delete</DropdownMenuItem>
                             </DropdownMenuGroup>
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -398,7 +422,10 @@ export default function PaymentLinks() {
                         <DropdownMenuItem className="cursor-pointer" onClick={() => handleCopyLink(link)}>Copy Link</DropdownMenuItem>
                         {link.reference && <DropdownMenuItem className="cursor-pointer" onClick={() => window.open(link.reference, '_blank')}>Open in Stripe</DropdownMenuItem>}
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem className="cursor-pointer text-amber-600">Disable</DropdownMenuItem>
+                        <DropdownMenuItem className="cursor-pointer text-amber-600" onClick={() => handleToggleActive(link)}>
+                          {link.is_active ? 'Disable' : 'Enable'}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem className="cursor-pointer text-red-600" onClick={() => handleDelete(link)}>Delete</DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>

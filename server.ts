@@ -355,6 +355,22 @@ async function startServer() {
             amount: session.amount_total,
           });
         }
+
+        // ── Payment link (reusable — record a transaction, no invoice) ────
+        const { paymentLinkId } = session.metadata ?? {};
+        if (paymentLinkId && userId) {
+          await supabaseAdmin.from("transactions").insert({
+            id: randomUUID(),
+            amount: (session.amount_total ?? 0) / 100,
+            currency: session.currency?.toUpperCase() ?? "USD",
+            status: "Success",
+            payment_method: "Card",
+            client: session.customer_details?.name ?? session.customer_details?.email ?? "Customer",
+            user_id: userId,
+            payment_link_id: paymentLinkId,
+          });
+          addLog("payment_confirmation", `Payment link paid: ${paymentLinkId}`, { sessionId: session.id });
+        }
       }
       res.json({ received: true });
     }
@@ -400,6 +416,22 @@ async function startServer() {
   // ── Public payment routes — for customers (no auth required) ────────────
   // Customers pay via /pay/:id, they don't have Supabase sessions.
 
+  // Public: payment link details for the hosted pay page (no auth).
+  app.get("/api/public/payment-links/:id", async (req, res) => {
+    const { data: link } = await supabaseAdmin
+      .from("payment_links")
+      .select("id, title, description, amount, currency, methods, is_active, clicks, created_at")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (!link) { res.status(404).json({ error: "Payment link not found" }); return; }
+    if (!link.is_active) { res.status(410).json({ error: "This payment link has been disabled" }); return; }
+
+    void supabaseAdmin.from("payment_links").update({ clicks: (link.clicks ?? 0) + 1 }).eq("id", link.id)
+      .then(() => { /* fire-and-forget */ });
+
+    res.json({ data: { ...link, clicks: undefined } });
+  });
+
   app.post("/api/public/stripe/create-checkout", async (req, res) => {
     if (!process.env.STRIPE_SECRET_KEY) {
       res.status(503).json({ error: "Stripe is not configured on this server. Add STRIPE_SECRET_KEY to environment variables." });
@@ -411,6 +443,38 @@ async function startServer() {
       .select("*")
       .eq("id", invoiceId)
       .maybeSingle();
+
+    // ── Payment link fallback: /pay/:id also serves reusable payment links ──
+    if (!inv) {
+      const { data: link } = await supabaseAdmin.from("payment_links").select("*").eq("id", invoiceId).maybeSingle();
+      if (link) {
+        if (!link.is_active) { res.status(410).json({ error: "This payment link has been disabled" }); return; }
+        let linkKey = process.env.STRIPE_SECRET_KEY ?? "";
+        const { data: gw } = await supabaseAdmin.from("gateway_configs").select("secret_key").eq("user_id", link.user_id).eq("gateway", "stripe").maybeSingle();
+        if (gw?.secret_key) linkKey = gw.secret_key;
+        if (!linkKey) { res.status(503).json({ error: "Stripe is not connected." }); return; }
+
+        const linkStripe = new Stripe(linkKey);
+        const linkSession = await linkStripe.checkout.sessions.create({
+          mode: "payment",
+          payment_method_types: ["card"],
+          line_items: [{
+            price_data: {
+              currency: (link.currency ?? "usd").toLowerCase(),
+              product_data: { name: link.title, ...(link.description && { description: link.description }) },
+              unit_amount: Math.round(Number(link.amount) * 100),
+            },
+            quantity: 1,
+          }],
+          success_url: `${process.env.APP_URL}/pay/${link.id}?stripe=success&link=1&session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${process.env.APP_URL}/pay/${link.id}`,
+          metadata: { paymentLinkId: link.id, userId: link.user_id },
+        });
+        addLog("api_request", `Stripe checkout session created for payment link ${link.id}`);
+        res.json({ url: linkSession.url });
+        return;
+      }
+    }
 
     // Resolve Stripe key: prefer operator's own key, fall back to platform key
     let stripeKey = process.env.STRIPE_SECRET_KEY ?? "";
@@ -974,6 +1038,9 @@ async function startServer() {
         user_id: userId,
         title,
         amount: Number(amount),
+        currency: currency.toUpperCase(),
+        methods,
+        ...(description ? { description } : {}),
         reference: stripeUrl,
         is_active: true,
         clicks: 0,
@@ -986,6 +1053,25 @@ async function startServer() {
       return;
     }
     res.status(201).json({ data });
+  });
+
+  api.patch("/payment-links/:id", async (req, res) => {
+    const { userId } = req as unknown as AuthenticatedRequest;
+    const allowed: Record<string, unknown> = {};
+    if (typeof req.body?.is_active === "boolean") allowed.is_active = req.body.is_active;
+    if (typeof req.body?.title === "string") allowed.title = req.body.title;
+    if (Object.keys(allowed).length === 0) { res.status(400).json({ error: "Nothing to update" }); return; }
+    const { data, error } = await supabaseAdmin.from("payment_links").update(allowed).eq("id", req.params.id).eq("user_id", userId).select().maybeSingle();
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    if (!data)  { res.status(404).json({ error: "Not found" }); return; }
+    res.json({ data });
+  });
+
+  api.delete("/payment-links/:id", async (req, res) => {
+    const { userId } = req as unknown as AuthenticatedRequest;
+    const { error } = await supabaseAdmin.from("payment_links").delete().eq("id", req.params.id).eq("user_id", userId);
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    res.json({ message: "Deleted" });
   });
 
   // --- Webhook Retry ---

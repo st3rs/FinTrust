@@ -168,6 +168,21 @@ app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async
       await syncCustomerTotalBilled(clientName, userId);
       addLog("payment_confirmation", `Stripe payment confirmed: ${invoiceId}`, { sessionId: session.id });
     }
+
+    // ── Payment link (reusable — record a transaction, no invoice) ──────────
+    const { paymentLinkId } = session.metadata ?? {};
+    if (paymentLinkId && userId) {
+      await supabaseAdmin.from("transactions").insert({
+        id: randomUUID(),
+        amount: (session.amount_total ?? 0) / 100,
+        currency: session.currency?.toUpperCase() ?? "USD",
+        status: "Success", payment_method: "Card",
+        client: session.customer_details?.name ?? session.customer_details?.email ?? "Customer",
+        user_id: userId,
+        payment_link_id: paymentLinkId,
+      });
+      addLog("payment_confirmation", `Payment link paid: ${paymentLinkId}`, { sessionId: session.id });
+    }
   }
   res.json({ received: true });
 });
@@ -200,18 +215,59 @@ app.get("/api/gateways/status", (_req, res) => {
   });
 });
 
+// Public: payment link details for the hosted pay page (no auth).
+// Also counts the visit — clicks was previously never incremented.
+app.get("/api/public/payment-links/:id", async (req, res) => {
+  const { data: link } = await supabaseAdmin
+    .from("payment_links")
+    .select("id, title, description, amount, currency, methods, is_active, clicks, created_at")
+    .eq("id", req.params.id)
+    .maybeSingle();
+  if (!link) { res.status(404).json({ error: "Payment link not found" }); return; }
+  if (!link.is_active) { res.status(410).json({ error: "This payment link has been disabled" }); return; }
+
+  void supabaseAdmin.from("payment_links").update({ clicks: (link.clicks ?? 0) + 1 }).eq("id", link.id)
+    .then(() => { /* fire-and-forget */ });
+
+  res.json({ data: { ...link, clicks: undefined } });
+});
+
+async function resolveStripeKey(userId: string | null | undefined): Promise<string> {
+  let stripeKey = process.env.STRIPE_SECRET_KEY ?? "";
+  if (userId) {
+    const { data: gw } = await supabaseAdmin.from("gateway_configs").select("secret_key").eq("user_id", userId).eq("gateway", "stripe").maybeSingle();
+    if (gw?.secret_key) stripeKey = gw.secret_key;
+  }
+  return stripeKey;
+}
+
 app.post("/api/public/stripe/create-checkout", async (req, res) => {
   const { invoiceId } = req.body as { invoiceId: string };
   const { data: inv } = await supabaseAdmin.from("invoices").select("*").eq("id", invoiceId).maybeSingle();
 
-  // Prefer operator's own Stripe key; fall back to platform key
-  let stripeKey = process.env.STRIPE_SECRET_KEY ?? "";
-  if (inv?.user_id) {
-    const { data: gw } = await supabaseAdmin.from("gateway_configs").select("secret_key").eq("user_id", inv.user_id).eq("gateway", "stripe").maybeSingle();
-    if (gw?.secret_key) stripeKey = gw.secret_key;
+  // ── Payment link fallback: /pay/:id also serves reusable payment links ────
+  if (!inv) {
+    const { data: link } = await supabaseAdmin.from("payment_links").select("*").eq("id", invoiceId).maybeSingle();
+    if (!link)           { res.status(404).json({ error: "Invoice not found" }); return; }
+    if (!link.is_active) { res.status(410).json({ error: "This payment link has been disabled" }); return; }
+
+    const linkStripeKey = await resolveStripeKey(link.user_id);
+    if (!linkStripeKey) { res.status(503).json({ error: "Stripe is not connected. Go to Settings → Payment Gateways to connect your Stripe account." }); return; }
+
+    const linkStripe = new Stripe(linkStripeKey);
+    const linkSession = await linkStripe.checkout.sessions.create({
+      mode: "payment", payment_method_types: ["card"],
+      line_items: [{ price_data: { currency: (link.currency ?? "usd").toLowerCase(), product_data: { name: link.title, ...(link.description && { description: link.description }) }, unit_amount: Math.round(Number(link.amount) * 100) }, quantity: 1 }],
+      success_url: `${process.env.APP_URL}/pay/${link.id}?stripe=success&link=1&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.APP_URL}/pay/${link.id}`,
+      metadata: { paymentLinkId: link.id, userId: link.user_id },
+    });
+    res.json({ url: linkSession.url });
+    return;
   }
+
+  const stripeKey = await resolveStripeKey(inv.user_id);
   if (!stripeKey) { res.status(503).json({ error: "Stripe is not connected. Go to Settings → Payment Gateways to connect your Stripe account." }); return; }
-  if (!inv)            { res.status(404).json({ error: "Invoice not found" }); return; }
   if (inv.status === "PAID") { res.status(409).json({ error: "Invoice already paid" }); return; }
 
   const stripe = new Stripe(stripeKey);
@@ -399,9 +455,62 @@ api.get("/payment-links", async (req, res) => {
 
 api.post("/payment-links", async (req, res) => {
   const { userId } = req as AuthenticatedRequest;
-  const { data, error } = await supabaseAdmin.from("payment_links").insert({ ...req.body, id: randomUUID(), user_id: userId }).select().single();
+  const { title, amount, currency = "USD", methods = {}, description } = req.body ?? {};
+  if (!title || !(Number(amount) > 0)) { res.status(400).json({ error: "title and a positive amount are required" }); return; }
+
+  // If Stripe is among the methods, also create a real Stripe Payment Link
+  // (stored in `reference`) so the merchant can share Stripe's hosted page too.
+  let stripeUrl: string | null = null;
+  if (methods?.stripe) {
+    const stripeKey = await resolveStripeKey(userId);
+    if (stripeKey) {
+      try {
+        const stripe = new Stripe(stripeKey);
+        const price = await stripe.prices.create({
+          currency: String(currency).toLowerCase(),
+          unit_amount: Math.round(Number(amount) * 100),
+          product_data: { name: String(title), ...(description ? { description: String(description) } : {}) },
+        });
+        const link = await stripe.paymentLinks.create({ line_items: [{ price: price.id, quantity: 1 }] });
+        stripeUrl = link.url;
+      } catch (err: any) {
+        res.status(502).json({ error: `Stripe error: ${err.message}` });
+        return;
+      }
+    }
+  }
+
+  const row = {
+    id: randomUUID(), user_id: userId,
+    title: String(title), amount: Number(amount),
+    currency: String(currency).toUpperCase(),
+    methods: typeof methods === "object" && methods !== null ? methods : { stripe: true },
+    ...(description && { description: String(description) }),
+    reference: stripeUrl,
+    is_active: true, clicks: 0,
+  };
+  const { data, error } = await supabaseAdmin.from("payment_links").insert(row).select().single();
   if (error) { res.status(500).json({ error: error.message }); return; }
   res.status(201).json({ data });
+});
+
+api.patch("/payment-links/:id", async (req, res) => {
+  const { userId } = req as unknown as AuthenticatedRequest;
+  const allowed: Record<string, unknown> = {};
+  if (typeof req.body?.is_active === "boolean") allowed.is_active = req.body.is_active;
+  if (typeof req.body?.title === "string") allowed.title = req.body.title;
+  if (Object.keys(allowed).length === 0) { res.status(400).json({ error: "Nothing to update" }); return; }
+  const { data, error } = await supabaseAdmin.from("payment_links").update(allowed).eq("id", req.params.id).eq("user_id", userId).select().maybeSingle();
+  if (error) { res.status(500).json({ error: error.message }); return; }
+  if (!data)  { res.status(404).json({ error: "Not found" }); return; }
+  res.json({ data });
+});
+
+api.delete("/payment-links/:id", async (req, res) => {
+  const { userId } = req as unknown as AuthenticatedRequest;
+  const { error } = await supabaseAdmin.from("payment_links").delete().eq("id", req.params.id).eq("user_id", userId);
+  if (error) { res.status(500).json({ error: error.message }); return; }
+  res.json({ message: "Deleted" });
 });
 
 // Webhook retry
