@@ -18,6 +18,7 @@ import rateLimit from "express-rate-limit";
 import { supabaseAdmin } from "../lib/supabase.js";
 import { requireAuth, requireAdmin, type AuthenticatedRequest } from "../middleware/auth.js";
 import { runAgentChat, type AgentMessage } from "./agent.js";
+import v1 from "./v1.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -172,6 +173,12 @@ app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async
 });
 
 app.use(express.json());
+
+// ── Public Developer API (/v1/*) ──────────────────────────────────────────────
+// Reached directly via the /v1/(.*) rewrite and also under /api/v1 for the
+// in-app API tester (same-origin, no extra rewrite needed).
+app.use("/v1", apiLimiter, v1);
+app.use("/api/v1", v1);
 
 // ── Public routes (no auth) ───────────────────────────────────────────────────
 

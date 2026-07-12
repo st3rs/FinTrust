@@ -9,6 +9,7 @@ import rateLimit from "express-rate-limit";
 import { supabaseAdmin, createUserClient } from "./lib/supabase.js";
 import { requireAuth, requireAdmin, type AuthenticatedRequest } from "./middleware/auth.js";
 import { runAgentChat, type AgentMessage } from "./api/agent.js";
+import v1 from "./api/v1.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -360,6 +361,10 @@ async function startServer() {
   );
 
   app.use(express.json());
+
+  // ── Public Developer API (/v1/*) — same router as production ─────────────
+  app.use("/v1", v1);
+  app.use("/api/v1", v1);
 
   // ── Payment status polling — public, lightweight, no auth ───────────────
   // Customers poll this every few seconds while looking at the QR code.

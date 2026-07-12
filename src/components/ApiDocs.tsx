@@ -187,16 +187,10 @@ const SECTIONS = [
 ];
 
 const TESTER_ENDPOINTS = [
-  { id: 'health', label: '/health', method: 'GET' as HttpMethod, path: '/health', body: null },
+  { id: 'health', label: '/health', method: 'GET' as HttpMethod, path: '/v1/health', body: null },
   { id: 'render', label: '/v1/render', method: 'POST' as HttpMethod, path: '/v1/render', body: ENDPOINTS.render.exampleRequest },
   { id: 'qr', label: '/v1/qr/promptpay', method: 'POST' as HttpMethod, path: '/v1/qr/promptpay', body: ENDPOINTS.qr.exampleRequest },
 ];
-
-const MOCK_RESPONSES: Record<string, { status: number; data: object }> = {
-  health: { status: 200, data: ENDPOINTS.health.exampleResponse },
-  render: { status: 201, data: ENDPOINTS.render.exampleResponse },
-  qr: { status: 200, data: ENDPOINTS.qr.exampleResponse },
-};
 
 // ── Helper components ─────────────────────────────────────────────────────────
 
@@ -738,7 +732,7 @@ export default function ApiDocs() {
     setResponse(null);
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     const ep = TESTER_ENDPOINTS.find(e => e.id === testerEndpoint);
     if (!ep) return;
     if (ep.id !== 'health' && !apiKey.trim()) {
@@ -752,11 +746,26 @@ export default function ApiDocs() {
       }
     }
     setIsSending(true); setResponse(null);
-    setTimeout(() => {
-      const mock = MOCK_RESPONSES[testerEndpoint];
-      setResponse({ status: mock.status, data: mock.data, ms: Math.floor(Math.random() * 120) + 60 });
-      setIsSending(false);
-    }, 650);
+    const started = performance.now();
+    try {
+      const res = await fetch(ep.path, {
+        method: ep.method,
+        headers: {
+          ...(ep.method === 'POST' && { 'Content-Type': 'application/json' }),
+          ...(apiKey.trim() && { Authorization: `Bearer ${apiKey.trim()}` }),
+        },
+        ...(ep.method === 'POST' && requestBody && { body: requestBody }),
+      });
+      const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      setResponse({ status: res.status, data, ms: Math.round(performance.now() - started) });
+    } catch (err) {
+      setResponse({
+        status: 0,
+        data: { error: err instanceof Error ? err.message : 'Network error' },
+        ms: Math.round(performance.now() - started),
+      });
+    }
+    setIsSending(false);
   };
 
   if (loadingProjects) {
@@ -988,7 +997,7 @@ export default function ApiDocs() {
           <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-800 bg-black/30">
             <Terminal className="w-4 h-4 text-slate-400" />
             <span className="text-sm font-semibold text-slate-200">{lang === 'en' ? 'API Tester' : 'ทดสอบ API'}</span>
-            <span className="ml-auto text-[10px] text-slate-600">{lang === 'en' ? 'Simulated' : 'Mock'}</span>
+            <span className="ml-auto text-[10px] text-emerald-500">{lang === 'en' ? 'Live' : 'ยิงจริง'}</span>
           </div>
 
           <div className="p-5 space-y-5 flex-1">
