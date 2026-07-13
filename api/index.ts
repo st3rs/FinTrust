@@ -619,16 +619,22 @@ api.get("/gateways/crypto/status", async (req, res) => {
   res.json({ wallets: (data?.config ?? {}) as Record<string, string>, updatedAt: data?.updated_at ?? null });
 });
 
-// Public: returns the invoice merchant's crypto wallets (no auth required)
+// Public: returns the merchant's crypto wallets for an invoice OR payment link (no auth)
 app.get("/api/public/crypto/wallets/:invoiceId", async (req, res) => {
   const { invoiceId } = req.params;
   const { data: inv } = await supabaseAdmin.from("invoices").select("user_id").eq("id", invoiceId).maybeSingle();
-  if (!inv?.user_id) { res.status(404).json({ error: "Invoice not found." }); return; }
+  let merchantId: string | null = inv?.user_id ?? null;
+
+  if (!merchantId) {
+    const { data: link } = await supabaseAdmin.from("payment_links").select("user_id").eq("id", invoiceId).maybeSingle();
+    merchantId = link?.user_id ?? null;
+  }
+  if (!merchantId) { res.status(404).json({ error: "Invoice not found." }); return; }
 
   const { data } = await supabaseAdmin
     .from("gateway_configs")
     .select("config")
-    .eq("user_id", inv.user_id)
+    .eq("user_id", merchantId)
     .eq("gateway", "crypto")
     .maybeSingle();
   res.json({ wallets: (data?.config ?? {}) as Record<string, string> });

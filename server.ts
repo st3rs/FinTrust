@@ -432,6 +432,27 @@ async function startServer() {
     res.json({ data: { ...link, clicks: undefined } });
   });
 
+  // Public: merchant's crypto wallets for an invoice OR payment link (no auth)
+  app.get("/api/public/crypto/wallets/:invoiceId", async (req, res) => {
+    const { invoiceId } = req.params;
+    const { data: inv } = await supabaseAdmin.from("invoices").select("user_id").eq("id", invoiceId).maybeSingle();
+    let merchantId: string | null = inv?.user_id ?? null;
+
+    if (!merchantId) {
+      const { data: link } = await supabaseAdmin.from("payment_links").select("user_id").eq("id", invoiceId).maybeSingle();
+      merchantId = link?.user_id ?? null;
+    }
+    if (!merchantId) { res.status(404).json({ error: "Invoice not found." }); return; }
+
+    const { data } = await supabaseAdmin
+      .from("gateway_configs")
+      .select("config")
+      .eq("user_id", merchantId)
+      .eq("gateway", "crypto")
+      .maybeSingle();
+    res.json({ wallets: (data?.config ?? {}) as Record<string, string> });
+  });
+
   app.post("/api/public/stripe/create-checkout", async (req, res) => {
     if (!process.env.STRIPE_SECRET_KEY) {
       res.status(503).json({ error: "Stripe is not configured on this server. Add STRIPE_SECRET_KEY to environment variables." });
