@@ -1497,6 +1497,63 @@ async function startServer() {
     message: { error: "Agent rate limit reached. Please wait a moment." },
   });
 
+  // ── Agent "act mode" quota ──────────────────────────────────────────────
+  // Free plan gets a small monthly trial of the GUI agent; Pro is unlimited.
+  // Frontend calls this before each task; 403 PLAN_LIMIT_REACHED → upsell.
+  const AGENT_FREE_TASKS_PER_MONTH = 5;
+
+  app.post("/api/agent/act/start", agentLimiter, requireAuth, async (req, res) => {
+    const { userId } = req as unknown as AuthenticatedRequest;
+    const { task } = req.body as { task?: string };
+    if (typeof task !== "string" || !task.trim()) {
+      res.status(400).json({ error: "task (string) is required" });
+      return;
+    }
+
+    const { data: userData } = await supabaseAdmin.auth.admin.getUserById(userId);
+    const planId: string = (userData?.user?.user_metadata?.plan as string) ?? "free";
+
+    if (planId !== "pro") {
+      const startOfMonth = new Date();
+      startOfMonth.setDate(1);
+      startOfMonth.setHours(0, 0, 0, 0);
+
+      const { count, error: countErr } = await supabaseAdmin
+        .from("agent_tasks")
+        .select("*", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .gte("created_at", startOfMonth.toISOString());
+
+      if (countErr) {
+        if (countErr.code === "42P01") {
+          res.status(503).json({ error: "Database migration required. Run migrations/006_agent_tasks.sql in your Supabase SQL Editor first." });
+        } else {
+          res.status(500).json({ error: countErr.message });
+        }
+        return;
+      }
+
+      if ((count ?? 0) >= AGENT_FREE_TASKS_PER_MONTH) {
+        res.status(403).json({
+          error: "Agent task limit reached",
+          code: "PLAN_LIMIT_REACHED",
+          message: `Free plan allows ${AGENT_FREE_TASKS_PER_MONTH} agent tasks per month. Upgrade to Pro for unlimited tasks.`,
+          upgradeRequired: true,
+          used: count ?? 0,
+          limit: AGENT_FREE_TASKS_PER_MONTH,
+        });
+        return;
+      }
+
+      await supabaseAdmin.from("agent_tasks").insert({ user_id: userId, task: task.slice(0, 500) });
+      res.json({ allowed: true, planId, used: (count ?? 0) + 1, limit: AGENT_FREE_TASKS_PER_MONTH });
+      return;
+    }
+
+    await supabaseAdmin.from("agent_tasks").insert({ user_id: userId, task: task.slice(0, 500) });
+    res.json({ allowed: true, planId, used: null, limit: null });
+  });
+
   // ── LLM proxy for PageAgent (in-page GUI agent) ─────────────────────────
   // The frontend PageAgent uses the user's Supabase access token as its
   // "apiKey", which arrives here as `Authorization: Bearer <jwt>` and is

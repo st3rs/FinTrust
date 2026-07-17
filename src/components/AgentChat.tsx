@@ -138,12 +138,48 @@ export default function AgentChat() {
 
     try {
       if (mode === 'act') {
+        // Quota gate: free plan gets a monthly trial, Pro is unlimited.
+        const gate = await fetch('/api/agent/act/start', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ task: content }),
+        });
+        const gateData = (await gate.json().catch(() => ({}))) as {
+          upgradeRequired?: boolean;
+          message?: string;
+          error?: string;
+          used?: number | null;
+          limit?: number | null;
+        };
+        if (!gate.ok) {
+          if (gateData.upgradeRequired) {
+            setMessages([
+              ...nextMessages,
+              {
+                role: 'assistant',
+                content:
+                  `🔒 สิทธิ์ทดลองใช้ AI Agent เดือนนี้ครบแล้ว (${gateData.used}/${gateData.limit} งาน)\n\n` +
+                  'อัปเกรดเป็น **Pro** เพื่อสั่งงานได้ไม่จำกัด — ไปที่ Settings → Upgrade to Pro',
+              },
+            ]);
+            return;
+          }
+          throw new Error(gateData.error ?? `HTTP ${gate.status}`);
+        }
+
         // GUI agent: performs the task by clicking/typing on the page itself.
         const agent = await getPageAgent(accessToken);
         const result = await agent.execute(content + ACT_GUARDRAIL);
+        const quotaNote =
+          typeof gateData.used === 'number' && typeof gateData.limit === 'number'
+            ? `\n\n_ทดลองใช้แล้ว ${gateData.used}/${gateData.limit} งานเดือนนี้ — Pro ใช้ได้ไม่จำกัด_`
+            : '';
         const summary = result.success
-          ? `✅ ${result.data || 'ทำงานเสร็จแล้วครับ'}`
-          : `⚠️ ทำไม่สำเร็จ: ${result.data || 'ไม่ทราบสาเหตุ'}`;
+          ? `✅ ${result.data || 'ทำงานเสร็จแล้วครับ'}${quotaNote}`
+          : `⚠️ ทำไม่สำเร็จ: ${result.data || 'ไม่ทราบสาเหตุ'}${quotaNote}`;
         setMessages([...nextMessages, { role: 'assistant', content: summary }]);
       } else {
         const result = await sendChat(nextMessages, accessToken);
