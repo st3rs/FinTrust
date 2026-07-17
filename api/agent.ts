@@ -31,7 +31,9 @@ export interface AgentResponse {
 function getClient(): OpenAI {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY is not set");
-  return new OpenAI({ apiKey: key });
+  // LLM_BASE_URL lets this run on any OpenAI-compatible provider
+  // (OpenRouter, DashScope, local) with the same key/env as the PageAgent proxy.
+  return new OpenAI({ apiKey: key, baseURL: process.env.LLM_BASE_URL || undefined });
 }
 
 // ---------------------------------------------------------------------------
@@ -340,7 +342,7 @@ export async function runAgentChat(
   // Agentic loop — runs until the model stops calling tools
   for (let iteration = 0; iteration < 10; iteration++) {
     const response = await client.chat.completions.create({
-      model: "gpt-4o",
+      model: process.env.LLM_MODEL ?? "gpt-4o",
       messages: chatMessages,
       tools: TOOLS,
       tool_choice: "auto",
@@ -363,6 +365,8 @@ export async function runAgentChat(
 
       // Execute each tool call
       for (const toolCall of assistantMsg.tool_calls ?? []) {
+        // Newer openai SDK adds a "custom" tool call variant — we only use functions.
+        if (toolCall.type !== "function") continue;
         toolsUsed.push(toolCall.function.name);
 
         const input = JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
