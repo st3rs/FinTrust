@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./lib/env.js";
 import express from "express";
 import path from "path";
 import cors from "cors";
@@ -1496,6 +1496,87 @@ async function startServer() {
     legacyHeaders: false,
     message: { error: "Agent rate limit reached. Please wait a moment." },
   });
+
+  // ── LLM proxy for PageAgent (in-page GUI agent) ─────────────────────────
+  // The frontend PageAgent uses the user's Supabase access token as its
+  // "apiKey", which arrives here as `Authorization: Bearer <jwt>` and is
+  // verified by requireAuth. The real LLM key never leaves the server.
+  // PageAgent fires one LLM call per GUI step — needs a looser limit than chat.
+  const llmProxyLimiter = rateLimit({
+    windowMs: 60_000,
+    max: 120,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "LLM rate limit reached. Please wait a moment." },
+  });
+
+  app.post(
+    "/api/llm/v1/chat/completions",
+    llmProxyLimiter,
+    requireAuth,
+    async (req, res) => {
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) {
+        res.status(503).json({ error: "LLM not configured. Set OPENAI_API_KEY." });
+        return;
+      }
+      const baseURL = (process.env.LLM_BASE_URL ?? "https://api.openai.com/v1").replace(/\/$/, "");
+
+      // Force the server-side model — the client-supplied model name is ignored.
+      const body: Record<string, unknown> = {
+        ...(req.body as Record<string, unknown>),
+        model: process.env.LLM_MODEL ?? "gpt-4o-mini",
+      };
+
+      // Qwen (via OpenRouter/Alibaba) rejects tool_choice "required"/object while
+      // thinking mode is on. Disabling reasoning lifts the restriction and keeps
+      // page-agent's forced tool calls intact (also faster/cheaper for GUI tasks).
+      if (/qwen/i.test(String(body.model)) && body.reasoning === undefined) {
+        body.reasoning = { enabled: false };
+      }
+
+      try {
+        const upstream = await fetch(`${baseURL}/chat/completions`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        });
+
+        // Buffer error responses so we can log the provider's actual message.
+        if (!upstream.ok) {
+          const errText = await upstream.text();
+          console.error(`[llm-proxy] upstream ${upstream.status}:`, errText.slice(0, 500));
+          res.status(upstream.status);
+          res.setHeader(
+            "Content-Type",
+            upstream.headers.get("content-type") ?? "application/json"
+          );
+          res.send(errText);
+          return;
+        }
+
+        res.status(upstream.status);
+        res.setHeader(
+          "Content-Type",
+          upstream.headers.get("content-type") ?? "application/json"
+        );
+        if (upstream.body) {
+          const { Readable } = await import("node:stream");
+          Readable.fromWeb(
+            upstream.body as unknown as import("node:stream/web").ReadableStream
+          ).pipe(res);
+        } else {
+          res.end();
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "LLM proxy error";
+        res.status(502).json({ error: msg });
+      }
+    }
+  );
 
   app.post(
     "/api/agent/chat",
