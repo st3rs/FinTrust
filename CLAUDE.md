@@ -81,6 +81,8 @@ feature gating:
 | Feature                                | Free | Pro |
 | -------------------------------------- | ---- | --- |
 | Invoices + PromptPay QR + PDF export   | yes  | yes |
+| AI chat (ask mode — data Q&A)          | yes  | yes |
+| AI agent (act mode — GUI automation)   | 5/mo trial | unlimited |
 | Recurring invoices / auto-reminders    | no   | yes |
 | Remove "InvoicePro" branding + domain  | no   | yes |
 | e-Tax Invoice / WHT (Thailand)         | no   | yes |

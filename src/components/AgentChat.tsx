@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Bot, X, Send, Loader2, ChevronDown, Sparkles } from 'lucide-react';
+import { Bot, X, Send, Loader2, ChevronDown, Sparkles, MousePointerClick, MessageCircleQuestion } from 'lucide-react';
+import type { PageAgentCore } from 'page-agent';
 import { useAuth } from '../lib/auth-context';
 
 // ---------------------------------------------------------------------------
@@ -51,6 +52,51 @@ const SUGGESTIONS = [
   "What's my total unpaid amount?",
 ];
 
+const ACT_SUGGESTIONS = [
+  'เปิดหน้าสร้าง invoice ใหม่',
+  'สร้าง invoice ให้ Acme Corp ค่าออกแบบ 15,000 บาท',
+  'ไปที่หน้า Customers แล้วเพิ่มลูกค้าใหม่ชื่อ Sabai Digital',
+  'สอนวิธีสร้าง invoice แรกให้หน่อย',
+];
+
+// ---------------------------------------------------------------------------
+// PageAgent (in-page GUI agent) — lazy singleton
+//
+// The LLM traffic goes through our server proxy (/api/llm/v1) which verifies
+// the Supabase JWT; the frontend never sees a real LLM key. The "apiKey"
+// passed here is the user's own access token.
+// ---------------------------------------------------------------------------
+
+let pageAgentInstance: PageAgentCore | null = null;
+
+async function getPageAgent(accessToken: string): Promise<PageAgentCore> {
+  if (pageAgentInstance) return pageAgentInstance;
+  // PageAgentCore = headless agent (no floating panel UI) — our chat IS the UI.
+  const [{ PageAgentCore }, { PageController }] = await Promise.all([
+    import('page-agent'),
+    import('@page-agent/page-controller'),
+  ]);
+  pageAgentInstance = new PageAgentCore({
+    // Model name is a placeholder — the proxy forces the server-side model.
+    model: 'fintrust-proxy',
+    baseURL: `${window.location.origin}/api/llm/v1`,
+    apiKey: accessToken,
+    language: 'en-US',
+    pageController: new PageController({
+      // Keep the agent's hands off our own chat widget, or it gets confused
+      // reading its own conversation and loading states.
+      interactiveBlacklist: [
+        () => document.getElementById('fintrust-agent-chat') as HTMLElement,
+      ],
+    }),
+  });
+  return pageAgentInstance;
+}
+
+// Safety guardrail + autonomy instruction appended to every action task.
+const ACT_GUARDRAIL =
+  '\n\nข้อกำหนด: (1) ทำงานต่อเนื่องจนจบโดยไม่ต้องหยุดถามยืนยันระหว่างทาง — ถ้าต้องเปลี่ยนหน้า (navigate) ก็ทำได้เลย (2) ห้ามกดปุ่มลบ (Delete), ปุ่มยืนยันการชำระเงิน หรือปุ่มส่งอีเมล/ข้อความออกภายนอกโดยเด็ดขาด — เฉพาะกรณีเหล่านี้เท่านั้นให้หยุดที่ขั้นตอนก่อนหน้าแล้วสรุปให้ผู้ใช้กดเอง (3) เมื่อจบงาน สรุปสั้นๆ ว่าทำอะไรไปบ้างและค้างอะไรไว้';
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -58,6 +104,7 @@ const SUGGESTIONS = [
 export default function AgentChat() {
   const { session } = useAuth();
   const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<'ask' | 'act'>('ask');
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -90,11 +137,57 @@ export default function AgentChat() {
     setLoading(true);
 
     try {
-      const result = await sendChat(nextMessages, accessToken);
-      setMessages([
-        ...nextMessages,
-        { role: 'assistant', content: result.reply, toolsUsed: result.toolsUsed },
-      ]);
+      if (mode === 'act') {
+        // Quota gate: free plan gets a monthly trial, Pro is unlimited.
+        const gate = await fetch('/api/agent/act/start', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ task: content }),
+        });
+        const gateData = (await gate.json().catch(() => ({}))) as {
+          upgradeRequired?: boolean;
+          message?: string;
+          error?: string;
+          used?: number | null;
+          limit?: number | null;
+        };
+        if (!gate.ok) {
+          if (gateData.upgradeRequired) {
+            setMessages([
+              ...nextMessages,
+              {
+                role: 'assistant',
+                content:
+                  `🔒 สิทธิ์ทดลองใช้ AI Agent เดือนนี้ครบแล้ว (${gateData.used}/${gateData.limit} งาน)\n\n` +
+                  'อัปเกรดเป็น **Pro** เพื่อสั่งงานได้ไม่จำกัด — ไปที่ Settings → Upgrade to Pro',
+              },
+            ]);
+            return;
+          }
+          throw new Error(gateData.error ?? `HTTP ${gate.status}`);
+        }
+
+        // GUI agent: performs the task by clicking/typing on the page itself.
+        const agent = await getPageAgent(accessToken);
+        const result = await agent.execute(content + ACT_GUARDRAIL);
+        const quotaNote =
+          typeof gateData.used === 'number' && typeof gateData.limit === 'number'
+            ? `\n\n_ทดลองใช้แล้ว ${gateData.used}/${gateData.limit} งานเดือนนี้ — Pro ใช้ได้ไม่จำกัด_`
+            : '';
+        const summary = result.success
+          ? `✅ ${result.data || 'ทำงานเสร็จแล้วครับ'}${quotaNote}`
+          : `⚠️ ทำไม่สำเร็จ: ${result.data || 'ไม่ทราบสาเหตุ'}${quotaNote}`;
+        setMessages([...nextMessages, { role: 'assistant', content: summary }]);
+      } else {
+        const result = await sendChat(nextMessages, accessToken);
+        setMessages([
+          ...nextMessages,
+          { role: 'assistant', content: result.reply, toolsUsed: result.toolsUsed },
+        ]);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาด กรุณาลองใหม่');
     } finally {
@@ -114,7 +207,7 @@ export default function AgentChat() {
   // ---------------------------------------------------------------------------
 
   return (
-    <>
+    <div id="fintrust-agent-chat">
       {/* ── Floating trigger button ─────────────────────────────────────────── */}
       <button
         onClick={() => setOpen((v) => !v)}
@@ -154,6 +247,30 @@ export default function AgentChat() {
           </button>
         </div>
 
+        {/* Mode toggle: ask (backend data chat) vs act (in-page GUI agent) */}
+        <div className="flex gap-1 px-3 py-2 border-b border-slate-200 dark:border-slate-700 shrink-0">
+          <button
+            onClick={() => setMode('ask')}
+            className={`flex-1 flex items-center justify-center gap-1.5 text-xs font-medium rounded-lg py-1.5 transition-colors ${
+              mode === 'ask'
+                ? 'bg-primary/10 text-primary'
+                : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+            }`}
+          >
+            <MessageCircleQuestion className="w-3.5 h-3.5" /> ถามข้อมูล
+          </button>
+          <button
+            onClick={() => setMode('act')}
+            className={`flex-1 flex items-center justify-center gap-1.5 text-xs font-medium rounded-lg py-1.5 transition-colors ${
+              mode === 'act'
+                ? 'bg-primary/10 text-primary'
+                : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+            }`}
+          >
+            <MousePointerClick className="w-3.5 h-3.5" /> สั่งทำ
+          </button>
+        </div>
+
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
           {messages.length === 0 && !loading && (
@@ -172,7 +289,7 @@ export default function AgentChat() {
 
               {/* Suggestion chips */}
               <div className="grid grid-cols-2 gap-2">
-                {SUGGESTIONS.map((s) => (
+                {(mode === 'act' ? ACT_SUGGESTIONS : SUGGESTIONS).map((s) => (
                   <button
                     key={s}
                     onClick={() => handleSend(s)}
@@ -225,7 +342,9 @@ export default function AgentChat() {
               </div>
               <div className="bg-slate-100 dark:bg-slate-800 rounded-2xl rounded-bl-sm px-4 py-3 flex items-center gap-2">
                 <Loader2 className="w-4 h-4 text-primary animate-spin" />
-                <span className="text-xs text-slate-500">กำลังค้นหาข้อมูล…</span>
+                <span className="text-xs text-slate-500">
+                  {mode === 'act' ? 'กำลังทำงานบนหน้าจอ…' : 'กำลังค้นหาข้อมูล…'}
+                </span>
               </div>
             </div>
           )}
@@ -247,7 +366,11 @@ export default function AgentChat() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="พิมพ์คำถามหรือคำสั่ง… (Enter ส่ง)"
+              placeholder={
+                mode === 'act'
+                  ? 'บอกงานที่ให้ทำบนหน้าจอ… (Enter ส่ง)'
+                  : 'พิมพ์คำถามหรือคำสั่ง… (Enter ส่ง)'
+              }
               rows={1}
               disabled={loading || !accessToken}
               className="flex-1 bg-transparent resize-none text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none disabled:opacity-50 max-h-32"
@@ -267,6 +390,6 @@ export default function AgentChat() {
           </p>
         </div>
       </div>
-    </>
+    </div>
   );
 }
