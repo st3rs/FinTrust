@@ -25,7 +25,7 @@ router.post("/", async (req, res) => {
   // ── Input validation ──────────────────────────────────────────────────────
   const parsed = RenderRequestSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(422).json({ errors: parsed.error.errors });
+    res.status(422).json({ errors: parsed.error.issues });
     return;
   }
 
