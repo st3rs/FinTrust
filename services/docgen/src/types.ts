@@ -14,7 +14,7 @@ export const RenderOptionsSchema = z.object({
 
 export const RenderRequestSchema = z.object({
   templateId: z.string().min(1),
-  data: z.record(z.unknown()),
+  data: z.record(z.string(), z.unknown()),
   format: z.enum(["pdf", "html"]).default("pdf"),
   options: RenderOptionsSchema.optional(),
 });

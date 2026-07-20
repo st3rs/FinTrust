@@ -3,9 +3,10 @@ import express from "express";
 import path from "path";
 import cors from "cors";
 import { createServer as createViteServer } from "vite";
-import { randomUUID } from "crypto";
+import { randomUUID, randomBytes, createHmac } from "crypto";
 import Stripe from "stripe";
 import rateLimit from "express-rate-limit";
+import { z } from "zod";
 import { supabaseAdmin, createUserClient } from "./lib/supabase.js";
 import { requireAuth, requireAdmin, type AuthenticatedRequest } from "./middleware/auth.js";
 import { runAgentChat, type AgentMessage } from "./api/agent.js";
@@ -164,22 +165,30 @@ async function deliverWebhook(
   payload: unknown,
   logId: string,
   userId: string,
-  attempt = 1
+  attempt = 1,
+  secret?: string,
+  maxAttempts = 3
 ): Promise<void> {
-  const MAX_ATTEMPTS = 3;
+  const MAX_ATTEMPTS = maxAttempts;
   if (attempt > 1) {
     await new Promise((r) => setTimeout(r, (attempt - 1) * 2_000));
   }
 
   try {
+    const body = JSON.stringify(payload);
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "X-FinTrust-Event": eventType,
+      "X-FinTrust-Attempt": String(attempt),
+    };
+    if (secret) {
+      headers["X-FinTrust-Signature"] =
+        `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+    }
     const res = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-FinTrust-Event": eventType,
-        "X-FinTrust-Attempt": String(attempt),
-      },
-      body: JSON.stringify(payload),
+      headers,
+      body,
       signal: AbortSignal.timeout(10_000), // 10s per attempt
     });
 
@@ -196,7 +205,7 @@ async function deliverWebhook(
       });
     } else if (attempt < MAX_ATTEMPTS) {
       addLog("webhook", `Webhook attempt ${attempt} failed (HTTP ${res.status}), retrying…`, { logId });
-      await deliverWebhook(url, eventType, payload, logId, userId, attempt + 1);
+      await deliverWebhook(url, eventType, payload, logId, userId, attempt + 1, secret, maxAttempts);
     } else {
       addLog("webhook", `Webhook failed after ${MAX_ATTEMPTS} attempts (HTTP ${res.status})`, { logId });
     }
@@ -204,11 +213,96 @@ async function deliverWebhook(
     const reason = err.name === "AbortError" ? "timeout (10s)" : err.message;
     if (attempt < MAX_ATTEMPTS) {
       addLog("webhook", `Webhook attempt ${attempt} error: ${reason}, retrying…`, { logId });
-      await deliverWebhook(url, eventType, payload, logId, userId, attempt + 1);
+      await deliverWebhook(url, eventType, payload, logId, userId, attempt + 1, secret, maxAttempts);
     } else {
       addLog("webhook", `Webhook delivery failed: ${reason}`, { logId });
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Webhook event dispatch — fan out an event to every matching active endpoint
+// ---------------------------------------------------------------------------
+
+const WEBHOOK_EVENT_TYPES = [
+  "invoice.created",
+  "invoice.paid",
+  "payment_link.paid",
+  "test.ping",
+] as const;
+
+const webhookEndpointSchema = z.object({
+  url: z.string().url().max(2048),
+  description: z.string().max(500).optional(),
+  events: z.array(z.enum(WEBHOOK_EVENT_TYPES)).max(WEBHOOK_EVENT_TYPES.length).optional(),
+});
+
+// Endpoints must resolve to a public host — the server fetches these URLs, so
+// loopback/link-local/private literals are rejected to keep SSRF out of reach.
+// (Dev tip: use a tunnel like ngrok to test against a local receiver.)
+function isAllowedWebhookUrl(raw: string): boolean {
+  let u: URL;
+  try { u = new URL(raw); } catch { return false; }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return false;
+  const host = u.hostname.toLowerCase();
+  if (host === "localhost" || host === "0.0.0.0" || host.endsWith(".local") || host.endsWith(".internal")) return false;
+  if (/^127\.|^10\.|^192\.168\.|^169\.254\.|^172\.(1[6-9]|2\d|3[01])\./.test(host)) return false;
+  if (host === "::1" || host.startsWith("[")) return false;
+  return true;
+}
+
+/**
+ * Records one webhook_logs row per matching endpoint and delivers the signed
+ * payload. Returns the created log ids. `await` it on serverless (Vercel kills
+ * work after the response); fire-and-forget via setImmediate on the VPS.
+ */
+async function dispatchWebhookEvent(
+  userId: string,
+  eventType: (typeof WEBHOOK_EVENT_TYPES)[number],
+  data: unknown,
+  onlyEndpointId?: string,
+  maxAttempts = 3
+): Promise<string[]> {
+  let query = supabaseAdmin
+    .from("webhook_endpoints")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("is_active", true);
+  if (onlyEndpointId) query = query.eq("id", onlyEndpointId);
+
+  const { data: endpoints, error } = await query;
+  if (error || !endpoints?.length) return [];
+
+  const matching = endpoints.filter(
+    (ep) => !ep.events?.length || ep.events.includes(eventType)
+  );
+
+  const logIds: string[] = [];
+  await Promise.all(
+    matching.map(async (ep) => {
+      const logId = randomUUID();
+      const payload = {
+        id: logId,
+        type: eventType,
+        created_at: new Date().toISOString(),
+        data,
+      };
+      const { error: insErr } = await supabaseAdmin.from("webhook_logs").insert({
+        id: logId,
+        url: ep.url,
+        event_type: eventType,
+        payload,
+        user_id: userId,
+      });
+      if (insErr) {
+        addLog("webhook", `Failed to record webhook log: ${insErr.message}`);
+        return;
+      }
+      logIds.push(logId);
+      await deliverWebhook(ep.url, eventType, payload, logId, userId, 1, ep.secret, maxAttempts);
+    })
+  );
+  return logIds;
 }
 
 // ---------------------------------------------------------------------------
@@ -354,6 +448,16 @@ async function startServer() {
             sessionId: session.id,
             amount: session.amount_total,
           });
+
+          setImmediate(() =>
+            dispatchWebhookEvent(userId, "invoice.paid", {
+              invoice_id: invoiceId,
+              client: clientName,
+              amount: (session.amount_total ?? 0) / 100,
+              currency: session.currency?.toUpperCase() ?? "USD",
+              gateway: "Card",
+            })
+          );
         }
 
         // ── Payment link (reusable — record a transaction, no invoice) ────
@@ -370,6 +474,16 @@ async function startServer() {
             payment_link_id: paymentLinkId,
           });
           addLog("payment_confirmation", `Payment link paid: ${paymentLinkId}`, { sessionId: session.id });
+
+          setImmediate(() =>
+            dispatchWebhookEvent(userId, "payment_link.paid", {
+              payment_link_id: paymentLinkId,
+              client: session.customer_details?.name ?? session.customer_details?.email ?? "Customer",
+              amount: (session.amount_total ?? 0) / 100,
+              currency: session.currency?.toUpperCase() ?? "USD",
+              gateway: "Card",
+            })
+          );
         }
       }
       res.json({ received: true });
@@ -637,6 +751,16 @@ async function startServer() {
             orderId: req.params.orderId,
             captureId: capture?.id,
           });
+
+          setImmediate(() =>
+            dispatchWebhookEvent(userId, "invoice.paid", {
+              invoice_id: invoiceId,
+              client: inv.client,
+              amount: parseFloat(capture?.amount?.value ?? String(inv.amount)),
+              currency: capture?.amount?.currency_code ?? inv.metadata?.currency ?? "USD",
+              gateway: "PayPal",
+            })
+          );
         }
       }
       res.json({ status: "COMPLETED" });
@@ -827,6 +951,17 @@ async function startServer() {
       res.status(500).json({ error: error.message });
       return;
     }
+
+    setImmediate(() =>
+      dispatchWebhookEvent(userId, "invoice.created", {
+        invoice_id: data.id,
+        invoice_number: data.metadata?.invoiceNumber ?? null,
+        client: data.client,
+        amount: Number(data.amount),
+        currency: data.metadata?.currency ?? "USD",
+      })
+    );
+
     res.status(201).json({ data });
   });
 
@@ -930,6 +1065,18 @@ async function startServer() {
         gateway: req.body.gateway ?? "Unknown",
         txId,
       }
+    );
+
+    setImmediate(() =>
+      dispatchWebhookEvent(userId, "invoice.paid", {
+        invoice_id: inv.id,
+        invoice_number: inv.metadata?.invoiceNumber ?? null,
+        client: inv.client,
+        amount: Number(inv.amount),
+        currency: inv.metadata?.currency ?? "THB",
+        gateway: req.body.gateway ?? "Unknown",
+        transaction_id: txId,
+      })
     );
 
     res.json({
@@ -1095,6 +1242,130 @@ async function startServer() {
     res.json({ message: "Deleted" });
   });
 
+  // --- Webhook Endpoints ---
+
+  api.get("/webhooks/endpoints", async (req, res) => {
+    const { userId } = req as AuthenticatedRequest;
+    const { data, error } = await supabaseAdmin
+      .from("webhook_endpoints")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    res.json({ data, eventTypes: WEBHOOK_EVENT_TYPES });
+  });
+
+  api.post("/webhooks/endpoints", async (req, res) => {
+    const { userId } = req as AuthenticatedRequest;
+    const parsed = webhookEndpointSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid body" });
+      return;
+    }
+    if (!isAllowedWebhookUrl(parsed.data.url)) {
+      res.status(400).json({ error: "URL must be a public http(s) endpoint (no localhost/private hosts)" });
+      return;
+    }
+    const { data, error } = await supabaseAdmin
+      .from("webhook_endpoints")
+      .insert({
+        id: randomUUID(),
+        user_id: userId,
+        url: parsed.data.url,
+        description: parsed.data.description ?? null,
+        events: parsed.data.events ?? [],
+        secret: `whsec_${randomBytes(24).toString("hex")}`,
+        is_active: true,
+      })
+      .select()
+      .single();
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    addLog("webhook", `Webhook endpoint added: ${data.url}`);
+    res.status(201).json({ data });
+  });
+
+  api.patch("/webhooks/endpoints/:id", async (req, res) => {
+    const { userId } = req as unknown as AuthenticatedRequest;
+    const parsed = webhookEndpointSchema
+      .partial()
+      .extend({ is_active: z.boolean().optional() })
+      .safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid body" });
+      return;
+    }
+    if (parsed.data.url !== undefined && !isAllowedWebhookUrl(parsed.data.url)) {
+      res.status(400).json({ error: "URL must be a public http(s) endpoint (no localhost/private hosts)" });
+      return;
+    }
+    const allowed: Record<string, unknown> = {};
+    if (parsed.data.url !== undefined) allowed.url = parsed.data.url;
+    if (parsed.data.description !== undefined) allowed.description = parsed.data.description;
+    if (parsed.data.events !== undefined) allowed.events = parsed.data.events;
+    if (parsed.data.is_active !== undefined) allowed.is_active = parsed.data.is_active;
+    if (Object.keys(allowed).length === 0) { res.status(400).json({ error: "Nothing to update" }); return; }
+
+    const { data, error } = await supabaseAdmin
+      .from("webhook_endpoints")
+      .update(allowed)
+      .eq("id", req.params.id)
+      .eq("user_id", userId)
+      .select()
+      .maybeSingle();
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    if (!data)  { res.status(404).json({ error: "Not found" }); return; }
+    res.json({ data });
+  });
+
+  api.delete("/webhooks/endpoints/:id", async (req, res) => {
+    const { userId } = req as unknown as AuthenticatedRequest;
+    const { error } = await supabaseAdmin
+      .from("webhook_endpoints")
+      .delete()
+      .eq("id", req.params.id)
+      .eq("user_id", userId);
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    res.json({ message: "Deleted" });
+  });
+
+  api.post("/webhooks/endpoints/:id/test", async (req, res) => {
+    const { userId } = req as unknown as AuthenticatedRequest;
+    const { data: ep } = await supabaseAdmin
+      .from("webhook_endpoints")
+      .select("id")
+      .eq("id", req.params.id)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (!ep) { res.status(404).json({ error: "Endpoint not found" }); return; }
+
+    // Single attempt — a test button should answer fast, not sit through retries
+    const logIds = await dispatchWebhookEvent(
+      userId,
+      "test.ping",
+      { message: "FinTrust webhook test delivery" },
+      req.params.id,
+      1
+    );
+    if (logIds.length === 0) {
+      res.status(409).json({ error: "Endpoint is inactive — activate it to send a test" });
+      return;
+    }
+    res.json({ message: "Test event sent", logIds });
+  });
+
+  api.get("/webhooks/logs", async (req, res) => {
+    const { userId } = req as AuthenticatedRequest;
+    const { limit, offset } = getPagination(req.query);
+    const { data, error, count } = await supabaseAdmin
+      .from("webhook_logs")
+      .select("*", { count: "exact" })
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    res.json({ data, total: count ?? 0, limit, offset });
+  });
+
   // --- Webhook Retry ---
 
   api.post("/webhooks/retry/:eventId", async (req, res) => {
@@ -1115,9 +1386,17 @@ async function startServer() {
 
     addLog("system", `Manual retry initiated for webhook ${eventId}`);
 
+    // Sign the retry if the URL still maps to a configured endpoint
+    const { data: ep } = await supabaseAdmin
+      .from("webhook_endpoints")
+      .select("secret")
+      .eq("user_id", userId)
+      .eq("url", log.url)
+      .maybeSingle();
+
     // Fire asynchronously — don't block the HTTP response
     setImmediate(() =>
-      deliverWebhook(log.url, log.event_type, log.payload, eventId, userId)
+      deliverWebhook(log.url, log.event_type, log.payload, eventId, userId, 1, ep?.secret)
     );
 
     res.json({ message: "Retry initiated", eventId });
