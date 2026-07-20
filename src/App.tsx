@@ -11,7 +11,8 @@ import Transactions from './components/Transactions';
 import PaymentLinks from './components/PaymentLinks';
 import PromptPay from './components/PromptPay';
 import Crypto from './components/Crypto';
-import PlaceholderPage from './components/PlaceholderPage';
+import Analytics from './components/Analytics';
+import Webhooks from './components/Webhooks';
 import CreateInvoice from './components/CreateInvoice';
 import PaymentPage from './components/PaymentPage';
 import Settings from './components/Settings';
@@ -70,8 +71,8 @@ export default function App() {
                   <Route path="/payment-links" element={<PaymentLinks />} />
                   <Route path="/promptpay" element={<PromptPay />} />
                   <Route path="/crypto" element={<Crypto />} />
-                  <Route path="/analytics" element={<PlaceholderPage title="Analytics" description="Detailed insights into revenue, conversion rates, and gateway performance." />} />
-                  <Route path="/webhooks" element={<PlaceholderPage title="Webhooks" description="Configure endpoint URLs and monitor webhook deliveries." />} />
+                  <Route path="/analytics" element={<Analytics />} />
+                  <Route path="/webhooks" element={<Webhooks />} />
                   <Route path="/invoices" element={<Invoices />} />
                   <Route path="/clients" element={<Clients />} />
                   <Route path="/payments" element={<Navigate to="/dashboard" replace />} />
