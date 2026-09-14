@@ -21,7 +21,11 @@ import {
   History,
   FileText,
   Save,
-  AlertTriangle
+  AlertTriangle,
+  Building2,
+  ChevronDown,
+  ChevronUp,
+  Terminal
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -62,6 +66,10 @@ export default function PromptPay() {
   const [qrType, setQrType] = useState('dynamic');
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedQR, setGeneratedQR] = useState<string | null>(null);
+  const [previewPayload, setPreviewPayload] = useState<string | null>(null);
+  const [showPayloadDetails, setShowPayloadDetails] = useState(false);
+  const [previewSecondsLeft, setPreviewSecondsLeft] = useState<number | null>(null);
+  const [payloadCopied, setPayloadCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const qrPreviewRef = useRef<HTMLDivElement>(null);
@@ -104,12 +112,14 @@ export default function PromptPay() {
 
     if (!isValidId) {
       setGeneratedQR(null);
+      setPreviewPayload(null);
       return;
     }
 
     // Dynamic QR needs an amount; static can be open (any amount)
     if (qrType === 'dynamic' && !formData.amount) {
       setGeneratedQR(null);
+      setPreviewPayload(null);
       return;
     }
 
@@ -126,9 +136,15 @@ export default function PromptPay() {
           margin: 2,
           color: { dark: '#0f172a', light: '#ffffff' },
         });
-        if (!cancelled) setGeneratedQR(dataUrl);
+        if (!cancelled) {
+          setGeneratedQR(dataUrl);
+          setPreviewPayload(payload);
+        }
       } catch {
-        if (!cancelled) setGeneratedQR(null);
+        if (!cancelled) {
+          setGeneratedQR(null);
+          setPreviewPayload(null);
+        }
       }
     }, 350); // 350ms debounce — fast enough to feel live, not too eager
 
@@ -137,6 +153,22 @@ export default function PromptPay() {
       clearTimeout(timer);
     };
   }, [formData.promptPayId, formData.amount, formData.allowCustomAmount, qrType]);
+
+  // ─── Preview expiry countdown ────────────────────────────────────────────
+  // Purely cosmetic — mirrors what the customer will see once this QR is
+  // generated, so the merchant can preview the payment window before sharing.
+  // Ticks only for dynamic QR with a real expiration selected (not "never").
+  useEffect(() => {
+    if (qrType !== 'dynamic' || formData.expiresIn === 'never' || !generatedQR) {
+      setPreviewSecondsLeft(null);
+      return;
+    }
+    setPreviewSecondsLeft(parseInt(formData.expiresIn, 10) * 60);
+    const interval = setInterval(() => {
+      setPreviewSecondsLeft((s) => (s === null || s <= 0 ? 0 : s - 1));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [qrType, formData.expiresIn, generatedQR]);
 
   const filteredRequests = requests.filter(req => {
     if (statusFilter !== 'ALL' && req.status !== statusFilter) return false;
@@ -280,6 +312,13 @@ export default function PromptPay() {
     } catch (e) {
       console.error('Download failed', e);
     }
+  };
+
+  const handleCopyPayload = () => {
+    if (!previewPayload) return;
+    navigator.clipboard.writeText(previewPayload).catch(() => {});
+    setPayloadCopied(true);
+    setTimeout(() => setPayloadCopied(false), 2000);
   };
 
   const handleSaveDefault = () => {
@@ -845,13 +884,29 @@ export default function PromptPay() {
             <div className="absolute inset-0 pattern-dots text-slate-200" style={{ backgroundSize: '24px 24px', backgroundImage: 'radial-gradient(currentColor 1px, transparent 1px)' }}></div>
             
             <div className="relative w-full max-w-[320px] bg-white rounded-2xl shadow-xl overflow-hidden ring-1 ring-slate-200 flex flex-col items-center">
-              
-              {/* Fake Thai QR Header */}
-              <div className="w-full bg-[#1e3a8a] py-3 px-4 text-center">
-                <span className="text-xs font-bold text-white tracking-widest uppercase">Thai QR Payment</span>
+
+              {/* PromptPay-branded header */}
+              <div className="w-full bg-gradient-to-r from-[#1e3a8a] to-[#0057b8] pt-4 pb-3 px-4 text-center relative">
+                <div className="inline-flex items-center justify-center bg-white rounded-lg px-3 py-1.5 shadow-inner mb-1">
+                  <span className="text-[#1e3a8a] font-extrabold tracking-wider text-[11px] flex items-center gap-1.5">
+                    <Building2 className="w-3 h-3" /> PROMPTPAY พร้อมเพย์
+                  </span>
+                </div>
+                <p className="text-[11px] text-blue-100 mt-0.5">{formData.merchantName || 'FinTrust Merchant'}</p>
+
+                {/* Live expiry countdown — mirrors the customer-facing timer */}
+                {previewSecondsLeft !== null && (
+                  <div className="mt-2 inline-flex items-center gap-1.5 bg-black/25 border border-white/20 px-2.5 py-1 rounded-full text-[10px] font-mono">
+                    <Clock className="w-3 h-3 text-amber-300" />
+                    <span className="text-blue-100">Expires in</span>
+                    <span className="text-amber-300 font-bold">
+                      {String(Math.floor(previewSecondsLeft / 60)).padStart(2, '0')}:
+                      {String(previewSecondsLeft % 60).padStart(2, '0')}
+                    </span>
+                  </div>
+                )}
               </div>
-              <div className="w-full bg-[#0057b8] py-1"></div>
-              
+
               <div className="p-6 flex flex-col items-center w-full">
                 
                 {/* QR Image Placeholder or Generated QR */}
@@ -887,9 +942,11 @@ export default function PromptPay() {
                   )}
                 </div>
                 
+                <p className="text-[10px] text-slate-400 -mt-2 mb-3 text-center">
+                  สแกนด้วยแอปธนาคารทุกแห่งในประเทศไทย
+                </p>
+
                 <div className="text-center w-full">
-                  <h3 className="font-bold text-slate-900 text-lg mb-1">{formData.merchantName || 'FinTrust Merchant'}</h3>
-                  
                   {formData.amount && (!formData.allowCustomAmount || qrType === 'dynamic') ? (
                     <div className="text-2xl font-bold text-indigo-700 my-3">
                       ฿ {Number(formData.amount).toLocaleString(undefined, {minimumFractionDigits: 2})}
@@ -916,14 +973,49 @@ export default function PromptPay() {
                 </div>
 
               </div>
-              
+
             </div>
-            
-            <div className="absolute bottom-6 flex gap-2">
-              <Button variant="secondary" size="sm" className="shadow-sm bg-white hover:bg-slate-50" onClick={handleDownloadPng} disabled={!generatedQR}>
+
+            {/* Technical details — raw EMVCo payload for merchants who want to verify before sharing */}
+            {previewPayload && (
+              <div className="w-full max-w-[320px] mt-3">
+                <button
+                  type="button"
+                  onClick={() => setShowPayloadDetails((v) => !v)}
+                  className="w-full flex items-center justify-between text-[11px] text-slate-500 hover:text-slate-700 px-1 py-1 transition-colors"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <Terminal className="w-3 h-3" /> Technical details (raw EMVCo payload)
+                  </span>
+                  {showPayloadDetails ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                </button>
+                {showPayloadDetails && (
+                  <div className="bg-slate-900 text-slate-200 rounded-xl p-3 border border-slate-800 shadow-md mt-1.5">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] font-mono text-cyan-400">EMVCo Payload</span>
+                      <button
+                        type="button"
+                        onClick={handleCopyPayload}
+                        className="text-[10px] hover:text-white px-2 py-0.5 bg-slate-800 rounded border border-slate-700 transition-colors flex items-center gap-1"
+                      >
+                        <Copy className="w-2.5 h-2.5" /> {payloadCopied ? 'Copied!' : 'Copy'}
+                      </button>
+                    </div>
+                    <p className="font-mono text-[10px] text-emerald-400 break-all leading-relaxed">{previewPayload}</p>
+                    <div className="mt-2 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[9px] text-slate-500 font-mono">
+                      <span>Checksum: <span className="text-amber-400 font-bold">{previewPayload.slice(-4)}</span></span>
+                      <span>Length: <span className="text-cyan-400">{previewPayload.length}</span> chars</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="w-full max-w-[320px] flex gap-2 mt-4">
+              <Button variant="secondary" size="sm" className="flex-1 shadow-sm bg-white hover:bg-slate-50" onClick={handleDownloadPng} disabled={!generatedQR}>
                 <Download className="w-4 h-4 mr-2" /> PNG
               </Button>
-              <Button variant="secondary" size="sm" className="shadow-sm bg-white hover:bg-slate-50" onClick={handlePrint} disabled={!generatedQR}>
+              <Button variant="secondary" size="sm" className="flex-1 shadow-sm bg-white hover:bg-slate-50" onClick={handlePrint} disabled={!generatedQR}>
                 <Printer className="w-4 h-4 mr-2" /> Print
               </Button>
             </div>

@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
-import { CreditCard, Wallet, QrCode, CheckCircle2, Loader2, AlertCircle, Bitcoin, Copy } from 'lucide-react';
+import { CreditCard, Wallet, QrCode, CheckCircle2, Loader2, AlertCircle, Bitcoin, Copy, Building2, ChevronDown, ChevronUp, Terminal } from 'lucide-react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import generatePayload from 'promptpay-qr';
@@ -271,6 +271,9 @@ function PromptPayTab({
   onSuccess: () => void;
 }) {
   const [qrSrc, setQrSrc] = useState<string | null>(null);
+  const [qrPayload, setQrPayload] = useState<string | null>(null);
+  const [showPayloadDetails, setShowPayloadDetails] = useState(false);
+  const [payloadCopied, setPayloadCopied] = useState(false);
   const [polling, setPolling] = useState(false);
   const [pollCount, setPollCount] = useState(0);
 
@@ -285,6 +288,7 @@ function PromptPayTab({
     const payload = generatePayload(promptPayId, {
       amount: invoice.amount > 0 ? invoice.amount : undefined,
     });
+    setQrPayload(payload);
     QRCode.toDataURL(payload, {
       width: 200,
       margin: 2,
@@ -293,6 +297,13 @@ function PromptPayTab({
       .then(setQrSrc)
       .catch(console.error);
   }, [promptPayId, invoice.amount]);
+
+  const handleCopyPayload = () => {
+    if (!qrPayload) return;
+    navigator.clipboard.writeText(qrPayload).catch(() => {});
+    setPayloadCopied(true);
+    setTimeout(() => setPayloadCopied(false), 2000);
+  };
 
   // Auto-poll payment status every 3s once QR is visible.
   // Stops when PAID is detected, after 5 min (100 attempts), or on unmount.
@@ -327,30 +338,37 @@ function PromptPayTab({
   }, [qrSrc, invoice.id, invoice.status, onSuccess]);
 
   return (
-    <div className="space-y-5 flex flex-col items-center text-center">
-      <div>
-        <h4 className="font-medium text-sm">Scan with Thai Banking App</h4>
-        <p className="text-xs text-muted-foreground mt-1">KBank, SCB, BBL, Krungsri, etc.</p>
-      </div>
-
-      <div className="bg-white p-3 rounded-xl shadow-sm border border-[#113566]/20 relative">
-        <div className="w-[196px] h-[196px] bg-[#113566]/5 flex items-center justify-center rounded-lg">
-          {qrSrc ? (
-            <img src={qrSrc} alt="PromptPay QR" className="w-full h-full object-contain rounded" />
-          ) : (
-            <div className="flex flex-col items-center gap-2 text-muted-foreground">
-              <QrCode className="w-10 h-10 opacity-30" />
-              <span className="text-xs">{promptPayId ? 'Generating QR…' : 'PromptPay ID not set'}</span>
-            </div>
-          )}
-        </div>
-        {/* Live polling indicator */}
-        {polling && (
-          <div className="absolute -top-2 -right-2 flex items-center gap-1 bg-white border rounded-full px-2 py-0.5 shadow-sm text-[10px] font-medium text-emerald-600">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            Waiting for payment
+    <div className="space-y-4 flex flex-col items-center text-center">
+      <div className="w-full max-w-[240px] bg-white rounded-2xl shadow-sm border border-[#113566]/20 overflow-hidden">
+        {/* Official-style PromptPay header */}
+        <div className="w-full bg-gradient-to-r from-[#1e3a8a] to-[#0057b8] pt-3 pb-2.5 px-4 text-center">
+          <div className="inline-flex items-center justify-center bg-white rounded-lg px-2.5 py-1 shadow-inner">
+            <span className="text-[#1e3a8a] font-extrabold tracking-wider text-[10px] flex items-center gap-1">
+              <Building2 className="w-2.5 h-2.5" /> PROMPTPAY พร้อมเพย์
+            </span>
           </div>
-        )}
+        </div>
+
+        <div className="p-4 flex flex-col items-center relative">
+          <div className="w-[196px] h-[196px] bg-white p-1.5 border-2 border-dashed border-[#113566]/15 rounded-lg flex items-center justify-center relative">
+            {qrSrc ? (
+              <img src={qrSrc} alt="PromptPay QR" className="w-full h-full object-contain rounded" />
+            ) : (
+              <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                <QrCode className="w-10 h-10 opacity-30" />
+                <span className="text-xs">{promptPayId ? 'Generating QR…' : 'PromptPay ID not set'}</span>
+              </div>
+            )}
+            {/* Live polling indicator */}
+            {polling && (
+              <div className="absolute -top-2 -right-2 flex items-center gap-1 bg-white border rounded-full px-2 py-0.5 shadow-sm text-[10px] font-medium text-emerald-600">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                Waiting for payment
+              </div>
+            )}
+          </div>
+          <p className="text-[10px] text-slate-400 mt-2">สแกนด้วยแอปธนาคารทุกแห่งในประเทศไทย</p>
+        </div>
       </div>
 
       <p className="text-xs text-muted-foreground">
@@ -375,6 +393,41 @@ function PromptPayTab({
       >
         I've already paid — confirm manually
       </Button>
+
+      {/* Technical details — raw EMVCo payload, for the payer's own verification */}
+      {qrPayload && (
+        <div className="w-full max-w-[240px]">
+          <button
+            type="button"
+            onClick={() => setShowPayloadDetails((v) => !v)}
+            className="w-full flex items-center justify-between text-[11px] text-muted-foreground hover:text-foreground px-1 py-1 transition-colors"
+          >
+            <span className="flex items-center gap-1.5">
+              <Terminal className="w-3 h-3" /> Technical details
+            </span>
+            {showPayloadDetails ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </button>
+          {showPayloadDetails && (
+            <div className="bg-slate-900 text-slate-200 rounded-xl p-3 border border-slate-800 shadow-md mt-1 text-left">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] font-mono text-cyan-400">EMVCo Payload</span>
+                <button
+                  type="button"
+                  onClick={handleCopyPayload}
+                  className="text-[10px] hover:text-white px-2 py-0.5 bg-slate-800 rounded border border-slate-700 transition-colors flex items-center gap-1"
+                >
+                  <Copy className="w-2.5 h-2.5" /> {payloadCopied ? 'Copied!' : 'Copy'}
+                </button>
+              </div>
+              <p className="font-mono text-[10px] text-emerald-400 break-all leading-relaxed">{qrPayload}</p>
+              <div className="mt-2 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[9px] text-slate-500 font-mono">
+                <span>Checksum: <span className="text-amber-400 font-bold">{qrPayload.slice(-4)}</span></span>
+                <span>Length: <span className="text-cyan-400">{qrPayload.length}</span> chars</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
