@@ -74,7 +74,8 @@ cp .env.example .env
 # → Fill in VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
 
 # 4. Apply database schema
-# Paste supabase-setup.sql into Supabase Dashboard → SQL Editor → Run
+# New project: run supabase-setup.sql, then migrations/001...007 in order.
+# Existing project: run only migrations not yet applied, in numeric order.
 
 # 5. Start dev server
 npm run dev
@@ -112,7 +113,7 @@ FinTrust/
 | `VITE_SUPABASE_ANON_KEY` | Public anon key (Vite / frontend) |
 | `SUPABASE_SERVICE_ROLE_KEY` | **Server-only** service role key — never expose via Vite |
 | `APP_URL` | Public URL (used in payment links) |
-| `SEED_DB` | Set `true` to seed sample invoices on first boot (dev only) |
+| `CORS_ALLOWED_ORIGINS` | Optional comma-separated additional browser origins |
 
 ---
 
@@ -129,9 +130,9 @@ Deployed on Vercel — `vercel.json` routes all traffic through the Express serv
 
 ## Security Notes
 
-- All API routes (except `/api/health` and `/api/logs/*`) require a valid Supabase JWT
+- Tenant-management API routes require a valid Supabase JWT; payer routes use opaque public tokens
 - Every DB query is scoped by `user_id` even when using the admin client (defence in depth)
-- All INSERT RLS policies use `with check (auth.uid() = user_id)` — no null bypass
+- Financial mutations pass through server-side validation; browser sessions retain tenant-scoped RLS reads
 - `SUPABASE_SERVICE_ROLE_KEY` is never referenced in any `src/` file
 
 ---

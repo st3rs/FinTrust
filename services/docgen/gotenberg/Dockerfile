@@ -14,13 +14,11 @@ USER root
 # repo at build time and register them with fontconfig.
 #
 # Pinned to a commit SHA for reproducibility — bump deliberately, never float on
-# a branch. The default below is an intentionally INVALID placeholder so an
-# unconfigured build fails loudly instead of silently pulling the wrong bytes.
-# Set a real SHA from https://github.com/google/fonts/commits/main/ofl/sarabun
+# a branch. The four files below were verified at this revision.
 # (verify the four static weights still live at ofl/sarabun/Sarabun-<W>.ttf —
 # Google sometimes ships only the variable font, in which case vendor the TTFs
 # into ./fonts and swap the curl loop for a COPY for a fully air-gapped build).
-ARG GOOGLE_FONTS_SHA=SET-ME-TO-A-REAL-google-fonts-commit-sha
+ARG GOOGLE_FONTS_SHA=809e4d8b8d7e9364a914909bb777679606c178b8
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends curl ca-certificates fontconfig; \

@@ -1,8 +1,7 @@
 import { Router } from "express";
 import { createHash, randomUUID } from "crypto";
 import { readFile } from "fs/promises";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
+import { join } from "path";
 import { RenderRequestSchema } from "../types.js";
 import type { AuthenticatedRequest, RenderResponse } from "../types.js";
 import { renderTemplate } from "../lib/template.js";
@@ -13,10 +12,7 @@ import { requireAccountScope, MissingAccountScopeError } from "../lib/accountSco
 
 const router = Router();
 
-const TEMPLATES_DIR = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "../../templates"
-);
+const TEMPLATES_DIR = process.env.TEMPLATES_DIR ?? join(process.cwd(), "templates");
 
 // Built-in template IDs served from the filesystem
 const BUILTIN_TEMPLATES = new Set(["invoice-default"]);

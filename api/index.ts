@@ -15,6 +15,7 @@ import cors from "cors";
 import { randomUUID } from "crypto";
 import Stripe from "stripe";
 import rateLimit from "express-rate-limit";
+import { z } from "zod";
 import { supabaseAdmin } from "../lib/supabase.js";
 import { requireAuth, requireAdmin, type AuthenticatedRequest } from "../middleware/auth.js";
 import { runAgentChat, type AgentMessage } from "./agent.js";
@@ -74,6 +75,68 @@ function getPagination(query: Record<string, any>, defaultLimit = 20) {
   return { limit, offset };
 }
 
+function getPlanId(user: { app_metadata?: Record<string, unknown> } | null | undefined): "free" | "pro" {
+  return user?.app_metadata?.plan === "pro" ? "pro" : "free";
+}
+
+async function setUserPlan(userId: string, plan: "free" | "pro") {
+  const { data } = await supabaseAdmin.auth.admin.getUserById(userId);
+  await supabaseAdmin.auth.admin.updateUserById(userId, {
+    app_metadata: { ...(data.user?.app_metadata ?? {}), plan },
+  });
+}
+
+const InvoiceCreateSchema = z.object({
+  customerName: z.string().trim().min(1).max(160),
+  customerEmail: z.string().trim().email().max(254).optional().or(z.literal("")),
+  amount: z.number().positive().finite(),
+  currency: z.string().trim().regex(/^[A-Za-z]{3}$/).transform((value) => value.toUpperCase()).default("THB"),
+  invoiceDate: z.string().date().optional(),
+  dueDate: z.string().date(),
+  items: z.array(z.object({
+    description: z.string().trim().min(1).max(500),
+    quantity: z.number().positive().finite(),
+    price: z.number().nonnegative().finite(),
+  })).min(1).max(100),
+  notes: z.string().max(5000).optional().default(""),
+  taxRate: z.number().min(0).max(100).optional().default(0),
+  paymentMethods: z.object({
+    card: z.boolean(),
+    bank: z.boolean(),
+    qr: z.boolean(),
+    crypto: z.boolean(),
+  }).refine((methods) => Object.values(methods).some(Boolean), "Choose at least one payment method").optional(),
+});
+
+const CustomerCreateSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  email: z.string().trim().email().max(254),
+  contact_person: z.string().trim().max(160).optional().default(""),
+  phone: z.string().trim().max(40).optional().default(""),
+  logo_url: z.string().max(3_000_000).nullable().optional(),
+});
+
+const PaymentLinkCreateSchema = z.object({
+  title: z.string().trim().min(1).max(160),
+  description: z.string().trim().max(1000).optional().default(""),
+  amount: z.number().positive().finite(),
+  currency: z.string().trim().regex(/^[A-Za-z]{3}$/).transform((value) => value.toUpperCase()).default("USD"),
+  methods: z.object({
+    stripe: z.boolean().optional().default(false),
+    paypal: z.boolean().optional().default(false),
+    promptpay: z.boolean().optional().default(false),
+    crypto: z.boolean().optional().default(false),
+  }).refine((methods) => Object.values(methods).some(Boolean), "Choose at least one payment method"),
+});
+
+const QRPaymentCreateSchema = z.object({
+  promptpay_id: z.string().trim().regex(/^[0-9-]{10,17}$/),
+  amount: z.number().nonnegative().finite(),
+  reference: z.string().trim().max(160).optional().default(""),
+  qr_type: z.enum(["static", "dynamic"]),
+  expires_at: z.string().datetime().nullable().optional(),
+});
+
 // ─── Webhook delivery ─────────────────────────────────────────────────────────
 
 async function deliverWebhook(
@@ -116,11 +179,119 @@ async function syncCustomerTotalBilled(clientName: string, userId: string) {
   }
 }
 
+async function recordProviderTransaction(
+  provider: "stripe" | "paypal",
+  providerEventId: string,
+  row: Record<string, unknown>,
+  payload: unknown
+): Promise<boolean> {
+  const { data, error } = await supabaseAdmin
+    .from("transactions")
+    .upsert(
+      {
+        ...row,
+        provider,
+        provider_event_id: providerEventId,
+        verification_source: "provider",
+      },
+      { onConflict: "provider,provider_event_id", ignoreDuplicates: true }
+    )
+    .select("id");
+
+  if (error) throw error;
+  const inserted = Boolean(data?.length);
+  if (inserted) {
+    await supabaseAdmin.from("payment_events").upsert(
+      {
+        provider,
+        provider_event_id: providerEventId,
+        invoice_id: typeof row.invoice_id === "string" ? row.invoice_id : null,
+        user_id: typeof row.user_id === "string" ? row.user_id : null,
+        payload,
+      },
+      { onConflict: "provider,provider_event_id", ignoreDuplicates: true }
+    );
+  }
+  return inserted;
+}
+
+async function processStripeCheckout(session: Stripe.Checkout.Session, providerEventId: string) {
+  const { invoiceId, userId, upgradeTo, paymentLinkId } = session.metadata ?? {};
+
+  if (upgradeTo === "pro" && userId) {
+    await setUserPlan(userId, "pro");
+    addLog("system", `Account upgraded to Pro: ${userId}`);
+  }
+
+  if (invoiceId && userId && session.payment_status === "paid") {
+    const { data: invoice } = await supabaseAdmin
+      .from("invoices")
+      .select("amount, metadata, client")
+      .eq("id", invoiceId)
+      .eq("user_id", userId)
+      .maybeSingle();
+    const expectedAmount = Math.round(Number(invoice?.amount ?? -1) * 100);
+    const expectedCurrency = String(invoice?.metadata?.currency ?? "USD").toLowerCase();
+    if (!invoice || expectedAmount !== session.amount_total || expectedCurrency !== session.currency) {
+      throw new Error(`Stripe payment does not match invoice ${invoiceId}`);
+    }
+
+    const inserted = await recordProviderTransaction("stripe", providerEventId, {
+      id: randomUUID(), invoice_id: invoiceId,
+      amount: (session.amount_total ?? 0) / 100,
+      currency: session.currency?.toUpperCase() ?? "USD",
+      status: "Success", payment_method: "Card",
+      client: session.customer_details?.name ?? session.customer_details?.email ?? invoice.client,
+      user_id: userId,
+    }, session);
+    await supabaseAdmin.from("invoices").update({ status: "PAID" }).eq("id", invoiceId).eq("user_id", userId);
+    await syncCustomerTotalBilled(invoice.client, userId);
+    if (inserted) addLog("payment_confirmation", `Stripe payment confirmed: ${invoiceId}`, { sessionId: session.id });
+  }
+
+  if (paymentLinkId && userId && session.payment_status === "paid") {
+    const { data: link } = await supabaseAdmin
+      .from("payment_links")
+      .select("amount, currency")
+      .eq("id", paymentLinkId)
+      .eq("user_id", userId)
+      .maybeSingle();
+    const expectedAmount = Math.round(Number(link?.amount ?? -1) * 100);
+    const expectedCurrency = String(link?.currency ?? "USD").toLowerCase();
+    if (!link || expectedAmount !== session.amount_total || expectedCurrency !== session.currency) {
+      throw new Error(`Stripe payment does not match payment link ${paymentLinkId}`);
+    }
+    const inserted = await recordProviderTransaction("stripe", providerEventId, {
+      id: randomUUID(),
+      amount: (session.amount_total ?? 0) / 100,
+      currency: session.currency?.toUpperCase() ?? "USD",
+      status: "Success", payment_method: "Card",
+      client: session.customer_details?.name ?? session.customer_details?.email ?? "Customer",
+      user_id: userId,
+      payment_link_id: paymentLinkId,
+    }, session);
+    if (inserted) addLog("payment_confirmation", `Payment link paid: ${paymentLinkId}`, { sessionId: session.id });
+  }
+}
+
 // ─── Express app ──────────────────────────────────────────────────────────────
 
 const app = express();
 
-app.use(cors());
+const allowedOrigins = new Set(
+  [process.env.APP_URL, ...(process.env.CORS_ALLOWED_ORIGINS ?? "").split(",")]
+    .map((origin) => origin.trim().replace(/\/$/, ""))
+    .filter(Boolean)
+);
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || process.env.NODE_ENV !== "production" || allowedOrigins.has(origin.replace(/\/$/, ""))) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error("Origin is not allowed"));
+  },
+}));
 
 // Rate limiters
 const publicPaymentLimiter = rateLimit({ windowMs: 60_000, max: 30, standardHeaders: true, legacyHeaders: false, message: { error: "Too many requests." } });
@@ -145,49 +316,51 @@ app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async
     res.status(400).send(`Webhook Error: ${err.message}`); return;
   }
 
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object as Stripe.Checkout.Session;
-    const { invoiceId, userId, upgradeTo } = session.metadata ?? {};
-
-    if (upgradeTo === "pro" && userId) {
-      await supabaseAdmin.auth.admin.updateUserById(userId, { user_metadata: { plan: "pro" } });
-      addLog("system", `Account upgraded to Pro: ${userId}`);
+  try {
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object as Stripe.Checkout.Session;
+      await processStripeCheckout(session, `checkout_session:${session.id}`);
     }
-
-    if (invoiceId && userId) {
-      await supabaseAdmin.from("invoices").update({ status: "PAID" }).eq("id", invoiceId).eq("user_id", userId);
-      await supabaseAdmin.from("transactions").insert({
-        id: randomUUID(), invoice_id: invoiceId,
-        amount: (session.amount_total ?? 0) / 100,
-        currency: session.currency?.toUpperCase() ?? "USD",
-        status: "Success", payment_method: "Card",
-        client: session.customer_details?.name ?? session.customer_details?.email ?? "Customer",
-        user_id: userId,
-      });
-      const clientName = session.customer_details?.name ?? session.customer_details?.email ?? "Customer";
-      await syncCustomerTotalBilled(clientName, userId);
-      addLog("payment_confirmation", `Stripe payment confirmed: ${invoiceId}`, { sessionId: session.id });
-    }
-
-    // ── Payment link (reusable — record a transaction, no invoice) ──────────
-    const { paymentLinkId } = session.metadata ?? {};
-    if (paymentLinkId && userId) {
-      await supabaseAdmin.from("transactions").insert({
-        id: randomUUID(),
-        amount: (session.amount_total ?? 0) / 100,
-        currency: session.currency?.toUpperCase() ?? "USD",
-        status: "Success", payment_method: "Card",
-        client: session.customer_details?.name ?? session.customer_details?.email ?? "Customer",
-        user_id: userId,
-        payment_link_id: paymentLinkId,
-      });
-      addLog("payment_confirmation", `Payment link paid: ${paymentLinkId}`, { sessionId: session.id });
-    }
+    res.json({ received: true });
+  } catch (error) {
+    console.error("[stripe-webhook]", error);
+    res.status(400).json({ error: "Unable to reconcile Stripe payment" });
   }
-  res.json({ received: true });
 });
 
-app.use(express.json());
+// Merchants using their own Stripe account configure this tenant-specific
+// endpoint in Stripe. The webhook secret never leaves the server.
+app.post("/api/stripe/webhook/:merchantId", express.raw({ type: "application/json" }), async (req, res) => {
+  const { data: config } = await supabaseAdmin
+    .from("gateway_configs")
+    .select("secret_key, webhook_secret")
+    .eq("user_id", req.params.merchantId)
+    .eq("gateway", "stripe")
+    .maybeSingle();
+  if (!config?.secret_key || !config?.webhook_secret) {
+    res.status(503).json({ error: "Merchant Stripe webhook is not configured" });
+    return;
+  }
+
+  try {
+    const stripe = new Stripe(config.secret_key);
+    const event = stripe.webhooks.constructEvent(req.body, req.headers["stripe-signature"]!, config.webhook_secret);
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object as Stripe.Checkout.Session;
+      if (session.metadata?.userId !== req.params.merchantId) {
+        res.status(400).json({ error: "Merchant metadata mismatch" });
+        return;
+      }
+      await processStripeCheckout(session, `checkout_session:${session.id}`);
+    }
+    res.json({ received: true });
+  } catch (error) {
+    console.error("[merchant-stripe-webhook]", error);
+    res.status(400).json({ error: "Invalid Stripe webhook" });
+  }
+});
+
+app.use(express.json({ limit: "1mb" }));
 
 // ── Public Developer API (/v1/*) ──────────────────────────────────────────────
 // Reached directly via the /v1/(.*) rewrite and also under /api/v1 for the
@@ -198,11 +371,66 @@ app.use("/api/v1", v1);
 // ── Public routes (no auth) ───────────────────────────────────────────────────
 
 app.get("/api/health", (_req, res) => res.json({ status: "ok", ts: new Date().toISOString() }));
-app.get("/api/logs",   (_req, res) => res.json({ data: recentLogs }));
+app.get("/api/logs", requireAdmin as express.RequestHandler, (_req, res) => res.json({ data: recentLogs }));
 
 app.get("/api/public/payment-status/:invoiceId", async (req, res) => {
-  const { data } = await supabaseAdmin.from("invoices").select("status").eq("id", req.params.invoiceId).maybeSingle();
+  const { data } = await supabaseAdmin.from("invoices").select("status").eq("public_token", req.params.invoiceId).maybeSingle();
   res.json({ status: data?.status ?? "NOT_FOUND" });
+});
+
+// Public invoice view. The opaque public_token is the capability URL; never expose
+// the merchant's user_id or internal invoice primary key to the payer.
+app.get("/api/public/invoices/:token", async (req, res) => {
+  const { data: invoice, error } = await supabaseAdmin
+    .from("invoices")
+    .select("client, amount, date, due_date, status, metadata, created_at, user_id, public_token")
+    .eq("public_token", req.params.token)
+    .maybeSingle();
+
+  if (error) { res.status(500).json({ error: "Unable to load invoice" }); return; }
+  if (!invoice) { res.status(404).json({ error: "Invoice not found" }); return; }
+
+  const [{ data: merchant }, { data: gatewayConfigs }] = await Promise.all([
+    supabaseAdmin.auth.admin.getUserById(invoice.user_id),
+    supabaseAdmin.from("gateway_configs").select("gateway, environment, webhook_secret").eq("user_id", invoice.user_id),
+  ]);
+  const metadata = (invoice.metadata ?? {}) as Record<string, unknown>;
+  const merchantMetadata = merchant?.user?.user_metadata ?? {};
+  const configuredGateways = new Map((gatewayConfigs ?? []).map((row) => [row.gateway, row]));
+  const requestedMethods = (metadata.paymentMethods ?? {}) as Record<string, unknown>;
+
+  res.json({
+    data: {
+      id: invoice.public_token,
+      invoiceNumber: metadata.invoiceNumber ?? "Invoice",
+      amount: Number(invoice.amount),
+      currency: metadata.currency ?? "THB",
+      status: invoice.status,
+      customerName: invoice.client,
+      customerEmail: metadata.customerEmail ?? "",
+      dueDate: invoice.due_date ?? invoice.date,
+      createdAt: invoice.created_at ?? invoice.date,
+      items: Array.isArray(metadata.items) ? metadata.items : [],
+      paymentMethods: {
+        stripe: requestedMethods.card !== false,
+        paypal: requestedMethods.paypal === true || requestedMethods.bank === true,
+        promptpay: requestedMethods.qr !== false,
+        crypto: requestedMethods.crypto === true,
+      },
+      promptPayId: merchantMetadata.promptpay_id ?? null,
+      gatewayStatus: {
+        stripe: {
+          connected: Boolean(configuredGateways.get("stripe")?.webhook_secret) || Boolean(process.env.STRIPE_SECRET_KEY),
+          mode: configuredGateways.get("stripe")?.environment ?? null,
+        },
+        paypal: {
+          connected: Boolean(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_SECRET),
+          environment: process.env.PAYPAL_ENVIRONMENT ?? "sandbox",
+        },
+        promptpay: { connected: Boolean(merchantMetadata.promptpay_id) },
+      },
+    },
+  });
 });
 
 app.get("/api/gateways/status", (_req, res) => {
@@ -220,7 +448,7 @@ app.get("/api/gateways/status", (_req, res) => {
 app.get("/api/public/payment-links/:id", async (req, res) => {
   const { data: link } = await supabaseAdmin
     .from("payment_links")
-    .select("id, title, description, amount, currency, methods, is_active, clicks, created_at")
+    .select("id, title, description, amount, currency, methods, is_active, clicks, created_at, user_id")
     .eq("id", req.params.id)
     .maybeSingle();
   if (!link) { res.status(404).json({ error: "Payment link not found" }); return; }
@@ -229,27 +457,85 @@ app.get("/api/public/payment-links/:id", async (req, res) => {
   void supabaseAdmin.from("payment_links").update({ clicks: (link.clicks ?? 0) + 1 }).eq("id", link.id)
     .then(() => { /* fire-and-forget */ });
 
-  res.json({ data: { ...link, clicks: undefined } });
+  const [{ data: merchant }, { data: gatewayConfigs }] = await Promise.all([
+    supabaseAdmin.auth.admin.getUserById(link.user_id),
+    supabaseAdmin.from("gateway_configs").select("gateway, environment, webhook_secret").eq("user_id", link.user_id),
+  ]);
+  const merchantMetadata = merchant?.user?.user_metadata ?? {};
+  const configuredGateways = new Map((gatewayConfigs ?? []).map((row) => [row.gateway, row]));
+
+  res.json({
+    data: {
+      id: link.id,
+      title: link.title,
+      description: link.description,
+      amount: Number(link.amount),
+      currency: link.currency,
+      methods: link.methods,
+      is_active: link.is_active,
+      created_at: link.created_at,
+      promptPayId: merchantMetadata.promptpay_id ?? null,
+      gatewayStatus: {
+        stripe: {
+          connected: Boolean(configuredGateways.get("stripe")?.webhook_secret) || Boolean(process.env.STRIPE_SECRET_KEY),
+          mode: configuredGateways.get("stripe")?.environment ?? null,
+        },
+        paypal: {
+          connected: Boolean(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_SECRET),
+          environment: process.env.PAYPAL_ENVIRONMENT ?? "sandbox",
+        },
+        promptpay: { connected: Boolean(merchantMetadata.promptpay_id) },
+      },
+    },
+  });
 });
 
 async function resolveStripeKey(userId: string | null | undefined): Promise<string> {
   let stripeKey = process.env.STRIPE_SECRET_KEY ?? "";
   if (userId) {
-    const { data: gw } = await supabaseAdmin.from("gateway_configs").select("secret_key").eq("user_id", userId).eq("gateway", "stripe").maybeSingle();
-    if (gw?.secret_key) stripeKey = gw.secret_key;
+    const { data: gw } = await supabaseAdmin.from("gateway_configs").select("secret_key, webhook_secret").eq("user_id", userId).eq("gateway", "stripe").maybeSingle();
+    if (gw?.secret_key && gw?.webhook_secret) stripeKey = gw.secret_key;
   }
   return stripeKey;
 }
 
+app.get("/api/public/payment-links/:id/payment-status/:sessionId", async (req, res) => {
+  const { data: link } = await supabaseAdmin
+    .from("payment_links")
+    .select("id, user_id, amount, currency")
+    .eq("id", req.params.id)
+    .maybeSingle();
+  if (!link) { res.status(404).json({ status: "NOT_FOUND" }); return; }
+  const stripeKey = await resolveStripeKey(link.user_id);
+  if (!stripeKey) { res.status(503).json({ status: "UNAVAILABLE" }); return; }
+
+  try {
+    const session = await new Stripe(stripeKey).checkout.sessions.retrieve(req.params.sessionId);
+    const matches = session.metadata?.paymentLinkId === link.id
+      && session.metadata?.userId === link.user_id
+      && session.amount_total === Math.round(Number(link.amount) * 100)
+      && session.currency === String(link.currency).toLowerCase();
+    if (!matches) { res.status(400).json({ status: "MISMATCH" }); return; }
+    if (session.payment_status !== "paid") { res.json({ status: "PENDING" }); return; }
+    await processStripeCheckout(session, `checkout_session:${session.id}`);
+    res.json({ status: "PAID" });
+  } catch (error) {
+    console.error("[stripe-payment-link-status]", error);
+    res.status(400).json({ status: "INVALID" });
+  }
+});
+
 app.post("/api/public/stripe/create-checkout", async (req, res) => {
-  const { invoiceId } = req.body as { invoiceId: string };
-  const { data: inv } = await supabaseAdmin.from("invoices").select("*").eq("id", invoiceId).maybeSingle();
+  const { invoiceId } = req.body as { invoiceId?: string };
+  if (!invoiceId) { res.status(400).json({ error: "invoiceId is required" }); return; }
+  const { data: inv } = await supabaseAdmin.from("invoices").select("*").eq("public_token", invoiceId).maybeSingle();
 
   // ── Payment link fallback: /pay/:id also serves reusable payment links ────
   if (!inv) {
     const { data: link } = await supabaseAdmin.from("payment_links").select("*").eq("id", invoiceId).maybeSingle();
     if (!link)           { res.status(404).json({ error: "Invoice not found" }); return; }
     if (!link.is_active) { res.status(410).json({ error: "This payment link has been disabled" }); return; }
+    if (link.methods?.stripe !== true) { res.status(403).json({ error: "Card payments are disabled for this link" }); return; }
 
     const linkStripeKey = await resolveStripeKey(link.user_id);
     if (!linkStripeKey) { res.status(503).json({ error: "Stripe is not connected. Go to Settings → Payment Gateways to connect your Stripe account." }); return; }
@@ -269,14 +555,15 @@ app.post("/api/public/stripe/create-checkout", async (req, res) => {
   const stripeKey = await resolveStripeKey(inv.user_id);
   if (!stripeKey) { res.status(503).json({ error: "Stripe is not connected. Go to Settings → Payment Gateways to connect your Stripe account." }); return; }
   if (inv.status === "PAID") { res.status(409).json({ error: "Invoice already paid" }); return; }
+  if (inv.metadata?.paymentMethods?.card === false) { res.status(403).json({ error: "Card payments are disabled for this invoice" }); return; }
 
   const stripe = new Stripe(stripeKey);
   const session = await stripe.checkout.sessions.create({
     mode: "payment", payment_method_types: ["card"],
     line_items: [{ price_data: { currency: (inv.metadata?.currency ?? "usd").toLowerCase(), product_data: { name: inv.metadata?.invoiceNumber ?? `Invoice ${inv.id.slice(0, 8).toUpperCase()}`, description: `Payment from ${inv.client}` }, unit_amount: Math.round(Number(inv.amount) * 100) }, quantity: 1 }],
     customer_email: inv.metadata?.customerEmail ?? undefined,
-    success_url: `${process.env.APP_URL}/pay/${invoiceId}?stripe=success&session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${process.env.APP_URL}/pay/${invoiceId}`,
+    success_url: `${process.env.APP_URL}/pay/${inv.public_token}?stripe=success&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${process.env.APP_URL}/pay/${inv.public_token}`,
     metadata: { invoiceId: inv.id, userId: inv.user_id },
   });
   res.json({ url: session.url });
@@ -286,10 +573,21 @@ app.post("/api/public/paypal/create-order", async (req, res) => {
   if (!process.env.PAYPAL_CLIENT_ID || !process.env.PAYPAL_CLIENT_SECRET) {
     res.status(503).json({ error: "PayPal is not configured." }); return;
   }
-  const { invoiceId } = req.body as { invoiceId: string };
-  const { data: inv } = await supabaseAdmin.from("invoices").select("*").eq("id", invoiceId).maybeSingle();
-  if (!inv)            { res.status(404).json({ error: "Invoice not found" }); return; }
-  if (inv.status === "PAID") { res.status(409).json({ error: "Invoice already paid" }); return; }
+  const { invoiceId } = req.body as { invoiceId?: string };
+  if (!invoiceId) { res.status(400).json({ error: "invoiceId is required" }); return; }
+  const { data: inv } = await supabaseAdmin.from("invoices").select("*").eq("public_token", invoiceId).maybeSingle();
+  const { data: link } = inv ? { data: null } : await supabaseAdmin.from("payment_links").select("*").eq("id", invoiceId).maybeSingle();
+  if (!inv && !link) { res.status(404).json({ error: "Invoice or payment link not found" }); return; }
+  if (inv?.status === "PAID") { res.status(409).json({ error: "Invoice already paid" }); return; }
+  if (link && !link.is_active) { res.status(410).json({ error: "This payment link has been disabled" }); return; }
+  if (inv && inv.metadata?.paymentMethods?.bank !== true && inv.metadata?.paymentMethods?.paypal !== true) { res.status(403).json({ error: "PayPal is disabled for this invoice" }); return; }
+  if (link && link.methods?.paypal !== true) { res.status(403).json({ error: "PayPal is disabled for this link" }); return; }
+
+  const amount = Number(inv?.amount ?? link?.amount);
+  const currency = String(inv?.metadata?.currency ?? link?.currency ?? "USD").toUpperCase();
+  const title = String(inv?.metadata?.invoiceNumber ?? link?.title ?? invoiceId);
+  const description = inv ? `${title} — ${inv.client}` : link?.description ?? title;
+  const customId = inv ? `invoice|${inv.id}|${inv.user_id}` : `link|${link.id}|${link.user_id}`;
 
   try {
     const token = await getPayPalToken();
@@ -298,7 +596,7 @@ app.post("/api/public/paypal/create-order", async (req, res) => {
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "PayPal-Request-Id": randomUUID() },
       body: JSON.stringify({
         intent: "CAPTURE",
-        purchase_units: [{ reference_id: invoiceId, custom_id: `${inv.id}|${inv.user_id}`, amount: { currency_code: (inv.metadata?.currency ?? "USD").toUpperCase(), value: Number(inv.amount).toFixed(2) }, description: `${inv.metadata?.invoiceNumber ?? inv.id} — ${inv.client}` }],
+        purchase_units: [{ reference_id: inv?.id ?? link.id, custom_id: customId, amount: { currency_code: currency, value: amount.toFixed(2) }, description }],
         application_context: { shipping_preference: "NO_SHIPPING" },
       }),
     });
@@ -321,16 +619,38 @@ app.post("/api/public/paypal/capture-order/:orderId", async (req, res) => {
     if (!r.ok || data.status !== "COMPLETED") { res.status(500).json({ error: "PayPal capture failed", detail: data }); return; }
 
     const pu = data.purchase_units?.[0];
-    const [invoiceId, userId] = (pu?.custom_id ?? "").split("|");
+    const customParts = String(pu?.custom_id ?? "").split("|");
+    const [resourceType, resourceId, userId] = customParts.length === 3
+      ? customParts
+      : ["invoice", customParts[0], customParts[1]];
     const capture = pu?.payments?.captures?.[0];
 
-    if (invoiceId && userId) {
-      const { data: inv } = await supabaseAdmin.from("invoices").update({ status: "PAID" }).eq("id", invoiceId).eq("user_id", userId).select().single();
+    if (resourceType === "invoice" && resourceId && userId) {
+      const { data: inv } = await supabaseAdmin.from("invoices").select("*").eq("id", resourceId).eq("user_id", userId).maybeSingle();
       if (inv) {
-        await supabaseAdmin.from("transactions").insert({ id: randomUUID(), invoice_id: invoiceId, amount: parseFloat(capture?.amount?.value ?? String(inv.amount)), currency: capture?.amount?.currency_code ?? inv.metadata?.currency ?? "USD", status: "Success", payment_method: "PayPal", client: inv.client, user_id: userId });
+        const paidAmount = Number(capture?.amount?.value);
+        const paidCurrency = String(capture?.amount?.currency_code ?? "").toUpperCase();
+        const expectedCurrency = String(inv.metadata?.currency ?? "USD").toUpperCase();
+        if (!capture?.id || !Number.isFinite(paidAmount) || paidAmount !== Number(inv.amount) || paidCurrency !== expectedCurrency) {
+          res.status(400).json({ error: "PayPal payment does not match invoice" });
+          return;
+        }
+        const captureId = String(capture?.id ?? req.params.orderId);
+        const inserted = await recordProviderTransaction("paypal", captureId, { id: randomUUID(), invoice_id: resourceId, amount: paidAmount, currency: paidCurrency, status: "Success", payment_method: "PayPal", client: inv.client, user_id: userId }, data);
+        await supabaseAdmin.from("invoices").update({ status: "PAID" }).eq("id", resourceId).eq("user_id", userId);
         await syncCustomerTotalBilled(inv.client, userId);
-        addLog("payment_confirmation", `PayPal payment captured: ${invoiceId}`, { orderId: req.params.orderId });
+        if (inserted) addLog("payment_confirmation", `PayPal payment captured: ${resourceId}`, { orderId: req.params.orderId });
       }
+    } else if (resourceType === "link" && resourceId && userId) {
+      const { data: link } = await supabaseAdmin.from("payment_links").select("*").eq("id", resourceId).eq("user_id", userId).maybeSingle();
+      const paidAmount = Number(capture?.amount?.value);
+      const paidCurrency = String(capture?.amount?.currency_code ?? "").toUpperCase();
+      if (!link || !capture?.id || paidAmount !== Number(link.amount) || paidCurrency !== String(link.currency).toUpperCase()) {
+        res.status(400).json({ error: "PayPal payment does not match payment link" });
+        return;
+      }
+      const inserted = await recordProviderTransaction("paypal", String(capture.id), { id: randomUUID(), payment_link_id: resourceId, amount: paidAmount, currency: paidCurrency, status: "Success", payment_method: "PayPal", client: data.payer?.name?.given_name ?? data.payer?.email_address ?? "Customer", user_id: userId }, data);
+      if (inserted) addLog("payment_confirmation", `PayPal payment link captured: ${resourceId}`, { orderId: req.params.orderId });
     }
     res.json({ status: "COMPLETED" });
   } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -361,7 +681,7 @@ api.get("/invoices/:id", async (req, res) => {
 api.get("/plan/usage", async (req, res) => {
   const { userId } = req as AuthenticatedRequest;
   const { data: userData } = await supabaseAdmin.auth.admin.getUserById(userId);
-  const planId: string = (userData?.user?.user_metadata?.plan as string) ?? "free";
+  const planId = getPlanId(userData?.user);
   const limit = planId === "pro" ? null : 5;
   const startOfMonth = new Date(); startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0);
   const { count } = await supabaseAdmin.from("invoices").select("*", { count: "exact", head: true }).eq("user_id", userId).gte("created_at", startOfMonth.toISOString());
@@ -371,7 +691,7 @@ api.get("/plan/usage", async (req, res) => {
 api.post("/invoices", async (req, res) => {
   const { userId } = req as AuthenticatedRequest;
   const { data: userData } = await supabaseAdmin.auth.admin.getUserById(userId);
-  const planId: string = (userData?.user?.user_metadata?.plan as string) ?? "free";
+  const planId = getPlanId(userData?.user);
 
   if (planId !== "pro") {
     const startOfMonth = new Date(); startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0);
@@ -379,16 +699,44 @@ api.post("/invoices", async (req, res) => {
     if ((count ?? 0) >= 5) { res.status(403).json({ error: "Invoice limit reached", code: "PLAN_LIMIT_REACHED", message: "Free plan allows 5 invoices per month.", upgradeRequired: true }); return; }
   }
 
-  const body = req.body;
-  const newInvoice = { id: randomUUID(), client: body.customerName ?? "Unknown", amount: Number(body.amount) || 0, date: new Date().toISOString().split("T")[0], due_date: body.dueDate ? new Date(body.dueDate).toISOString().split("T")[0] : null, status: "UNPAID", metadata: { invoiceNumber: `INV-${new Date().getFullYear()}-${randomUUID().slice(0, 8).toUpperCase()}`, currency: body.currency ?? "USD", customerEmail: body.customerEmail ?? "", items: body.items ?? [] }, user_id: userId };
+  const parsed = InvoiceCreateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(422).json({ error: "Invalid invoice", details: parsed.error.flatten() });
+    return;
+  }
+
+  const body = parsed.data;
+  const newInvoice = {
+    id: randomUUID(),
+    client: body.customerName,
+    amount: body.amount,
+    date: body.invoiceDate ?? new Date().toISOString().split("T")[0],
+    due_date: body.dueDate,
+    status: "UNPAID",
+    metadata: {
+      invoiceNumber: `INV-${new Date().getFullYear()}-${randomUUID().slice(0, 8).toUpperCase()}`,
+      currency: body.currency,
+      customerEmail: body.customerEmail ?? "",
+      items: body.items,
+      notes: body.notes,
+      taxRate: body.taxRate,
+      paymentMethods: body.paymentMethods,
+    },
+    user_id: userId,
+  };
   const { data, error } = await supabaseAdmin.from("invoices").insert(newInvoice).select().single();
   if (error) { res.status(500).json({ error: error.message }); return; }
-  res.status(201).json({ data });
+  res.status(201).json({ data, paymentUrl: `${process.env.APP_URL}/pay/${data.public_token}` });
 });
 
 api.patch("/invoices/:id", async (req, res) => {
   const { userId } = req as unknown as AuthenticatedRequest;
-  const { data, error } = await supabaseAdmin.from("invoices").update(req.body).eq("id", req.params.id).eq("user_id", userId).select().single();
+  const allowed: Record<string, unknown> = {};
+  if (typeof req.body?.client === "string" && req.body.client.trim()) allowed.client = req.body.client.trim();
+  if (typeof req.body?.due_date === "string") allowed.due_date = req.body.due_date;
+  if (["DRAFT", "UNPAID", "VOID"].includes(req.body?.status)) allowed.status = req.body.status;
+  if (Object.keys(allowed).length === 0) { res.status(400).json({ error: "Nothing to update" }); return; }
+  const { data, error } = await supabaseAdmin.from("invoices").update(allowed).eq("id", req.params.id).eq("user_id", userId).select().single();
   if (error) { res.status(500).json({ error: error.message }); return; }
   if (!data)  { res.status(404).json({ error: "Not found" }); return; }
   res.json({ data });
@@ -402,21 +750,10 @@ api.delete("/invoices/:id", async (req, res) => {
 });
 
 // Payments
-api.post("/payments/:id/process", async (req, res) => {
-  const { userId } = req as unknown as AuthenticatedRequest;
-  const { data: inv, error: fetchErr } = await supabaseAdmin.from("invoices").select("*").eq("id", req.params.id).eq("user_id", userId).maybeSingle();
-  if (fetchErr) { res.status(500).json({ error: fetchErr.message }); return; }
-  if (!inv)     { res.status(404).json({ error: "Invoice not found" }); return; }
-  if (inv.status === "PAID") { res.status(409).json({ error: "Invoice already paid" }); return; }
-
-  const { data: updated, error: updateErr } = await supabaseAdmin.from("invoices").update({ status: "PAID" }).eq("id", inv.id).eq("user_id", userId).select().single();
-  if (updateErr) { res.status(500).json({ error: updateErr.message }); return; }
-
-  const txId = randomUUID();
-  await supabaseAdmin.from("transactions").insert({ id: txId, invoice_id: inv.id, client: inv.client, amount: inv.amount, currency: inv.metadata?.currency ?? "THB", status: "Success", payment_method: req.body.gateway ?? "Unknown", user_id: userId });
-  await syncCustomerTotalBilled(inv.client, userId);
-  addLog("payment_confirmation", `Payment received for ${inv.metadata?.invoiceNumber ?? inv.id}`, { amount: inv.amount, gateway: req.body.gateway ?? "Unknown" });
-  res.json({ data: updated, message: `Payment processed via ${req.body.gateway ?? "Unknown"}`, txId });
+api.post("/payments/:id/process", (_req, res) => {
+  res.status(410).json({
+    error: "Direct payment processing is disabled. Payment status is changed only by a verified provider webhook.",
+  });
 });
 
 // Transactions
@@ -439,7 +776,15 @@ api.get("/customers", async (req, res) => {
 
 api.post("/customers", async (req, res) => {
   const { userId } = req as AuthenticatedRequest;
-  const { data, error } = await supabaseAdmin.from("customers").insert({ ...req.body, id: randomUUID(), user_id: userId }).select().single();
+  const parsed = CustomerCreateSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(422).json({ error: "Invalid customer", details: parsed.error.flatten() }); return; }
+  const { data, error } = await supabaseAdmin.from("customers").insert({
+    ...parsed.data,
+    id: randomUUID(),
+    status: "Active",
+    total_billed: 0,
+    user_id: userId,
+  }).select().single();
   if (error) { res.status(500).json({ error: error.message }); return; }
   res.status(201).json({ data });
 });
@@ -455,38 +800,17 @@ api.get("/payment-links", async (req, res) => {
 
 api.post("/payment-links", async (req, res) => {
   const { userId } = req as AuthenticatedRequest;
-  const { title, amount, currency = "USD", methods = {}, description } = req.body ?? {};
-  if (!title || !(Number(amount) > 0)) { res.status(400).json({ error: "title and a positive amount are required" }); return; }
-
-  // If Stripe is among the methods, also create a real Stripe Payment Link
-  // (stored in `reference`) so the merchant can share Stripe's hosted page too.
-  let stripeUrl: string | null = null;
-  if (methods?.stripe) {
-    const stripeKey = await resolveStripeKey(userId);
-    if (stripeKey) {
-      try {
-        const stripe = new Stripe(stripeKey);
-        const price = await stripe.prices.create({
-          currency: String(currency).toLowerCase(),
-          unit_amount: Math.round(Number(amount) * 100),
-          product_data: { name: String(title), ...(description ? { description: String(description) } : {}) },
-        });
-        const link = await stripe.paymentLinks.create({ line_items: [{ price: price.id, quantity: 1 }] });
-        stripeUrl = link.url;
-      } catch (err: any) {
-        res.status(502).json({ error: `Stripe error: ${err.message}` });
-        return;
-      }
-    }
-  }
+  const parsed = PaymentLinkCreateSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(422).json({ error: "Invalid payment link", details: parsed.error.flatten() }); return; }
+  const { title, amount, currency, methods, description } = parsed.data;
 
   const row = {
     id: randomUUID(), user_id: userId,
-    title: String(title), amount: Number(amount),
-    currency: String(currency).toUpperCase(),
-    methods: typeof methods === "object" && methods !== null ? methods : { stripe: true },
-    ...(description && { description: String(description) }),
-    reference: stripeUrl,
+    title, amount, currency, methods,
+    ...(description && { description }),
+    // Always share FinTrust's hosted page so checkout sessions carry tenant
+    // metadata and can be reconciled by the verified provider webhook.
+    reference: null,
     is_active: true, clicks: 0,
   };
   const { data, error } = await supabaseAdmin.from("payment_links").insert(row).select().single();
@@ -533,7 +857,19 @@ api.get("/qr-payments", async (req, res) => {
 
 api.post("/qr-payments", async (req, res) => {
   const { userId } = req as AuthenticatedRequest;
-  const { data, error } = await supabaseAdmin.from("qr_payments").insert({ ...req.body, id: randomUUID(), user_id: userId }).select().single();
+  const parsed = QRPaymentCreateSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(422).json({ error: "Invalid QR payment", details: parsed.error.flatten() }); return; }
+  if (parsed.data.qr_type === "dynamic" && parsed.data.amount <= 0) {
+    res.status(422).json({ error: "Dynamic QR requires a positive amount" }); return;
+  }
+  const { data: userData } = await supabaseAdmin.auth.admin.getUserById(userId);
+  if (getPlanId(userData?.user) !== "pro") {
+    const startOfMonth = new Date(); startOfMonth.setUTCDate(1); startOfMonth.setUTCHours(0, 0, 0, 0);
+    const { count } = await supabaseAdmin.from("qr_payments").select("*", { count: "exact", head: true }).eq("user_id", userId).gte("created_at", startOfMonth.toISOString());
+    if ((count ?? 0) >= 10) { res.status(403).json({ error: "Monthly QR limit reached", code: "PLAN_LIMIT_REACHED" }); return; }
+  }
+  const { qr_type, expires_at, ...input } = parsed.data;
+  const { data, error } = await supabaseAdmin.from("qr_payments").insert({ ...input, qr_type, expires_at: qr_type === "dynamic" ? expires_at ?? null : null, status: qr_type === "static" ? "Active" : "Pending", id: randomUUID(), user_id: userId }).select().single();
   if (error) { res.status(500).json({ error: error.message }); return; }
   res.status(201).json({ data });
 });
@@ -541,7 +877,7 @@ api.post("/qr-payments", async (req, res) => {
 api.get("/qr-payments/usage", async (req, res) => {
   const { userId } = req as AuthenticatedRequest;
   const { data: userData } = await supabaseAdmin.auth.admin.getUserById(userId);
-  const planId: string = (userData?.user?.user_metadata?.plan as string) ?? "free";
+  const planId = getPlanId(userData?.user);
   const limit = planId === "pro" ? null : 10;
   const startOfMonth = new Date(); startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0);
   const { count } = await supabaseAdmin.from("qr_payments").select("*", { count: "exact", head: true }).eq("user_id", userId).gte("created_at", startOfMonth.toISOString());
@@ -551,12 +887,13 @@ api.get("/qr-payments/usage", async (req, res) => {
 // Stripe gateway management
 api.post("/gateways/stripe/connect", async (req, res) => {
   const { userId } = req as unknown as AuthenticatedRequest;
-  const { publishableKey, secretKey, environment = "live" } = req.body;
-  if (!publishableKey || !secretKey) { res.status(400).json({ error: "Both publishableKey and secretKey are required." }); return; }
+  const { publishableKey, secretKey, webhookSecret, environment = "live" } = req.body;
+  if (!publishableKey || !secretKey || !webhookSecret) { res.status(400).json({ error: "Publishable key, secret key, and webhook signing secret are required." }); return; }
   if (!secretKey.startsWith("sk_"))  { res.status(400).json({ error: "Invalid secret key format." }); return; }
+  if (!webhookSecret.startsWith("whsec_")) { res.status(400).json({ error: "Invalid webhook signing secret format." }); return; }
   try { await new Stripe(secretKey).balance.retrieve(); } catch { res.status(400).json({ error: "Stripe keys verification failed." }); return; }
 
-  const { error } = await supabaseAdmin.from("gateway_configs").upsert({ user_id: userId, gateway: "stripe", publishable_key: publishableKey, secret_key: secretKey, environment, updated_at: new Date().toISOString() }, { onConflict: "user_id,gateway" });
+  const { error } = await supabaseAdmin.from("gateway_configs").upsert({ user_id: userId, gateway: "stripe", publishable_key: publishableKey, secret_key: secretKey, webhook_secret: webhookSecret, environment, updated_at: new Date().toISOString() }, { onConflict: "user_id,gateway" });
   if (error) {
     if (error.code === "42P01") { res.status(503).json({ error: "Run migrations/001_gateway_configs.sql in Supabase SQL Editor first." }); }
     else { res.status(500).json({ error: error.message }); }
@@ -574,9 +911,9 @@ api.delete("/gateways/stripe/disconnect", async (req, res) => {
 
 api.get("/gateways/stripe/status", async (req, res) => {
   const { userId } = req as unknown as AuthenticatedRequest;
-  const { data, error } = await supabaseAdmin.from("gateway_configs").select("publishable_key, environment, updated_at").eq("user_id", userId).eq("gateway", "stripe").maybeSingle();
-  if (error?.code === "42P01") { res.json({ connected: false, publishableKey: null, environment: null, connectedAt: null, migrationPending: true }); return; }
-  res.json({ connected: Boolean(data), publishableKey: data?.publishable_key ?? null, environment: data?.environment ?? null, connectedAt: data?.updated_at ?? null });
+  const { data, error } = await supabaseAdmin.from("gateway_configs").select("publishable_key, environment, updated_at, webhook_secret").eq("user_id", userId).eq("gateway", "stripe").maybeSingle();
+  if (error) { res.json({ connected: false, publishableKey: null, environment: null, connectedAt: null, webhookConfigured: false, migrationPending: true }); return; }
+  res.json({ connected: Boolean(data?.webhook_secret), publishableKey: data?.publishable_key ?? null, environment: data?.environment ?? null, connectedAt: data?.updated_at ?? null, webhookConfigured: Boolean(data?.webhook_secret), webhookUrl: `${process.env.APP_URL}/api/stripe/webhook/${userId}` });
 });
 
 // ── Crypto wallet gateway ─────────────────────────────────────────────────────
@@ -622,7 +959,7 @@ api.get("/gateways/crypto/status", async (req, res) => {
 // Public: returns the merchant's crypto wallets for an invoice OR payment link (no auth)
 app.get("/api/public/crypto/wallets/:invoiceId", async (req, res) => {
   const { invoiceId } = req.params;
-  const { data: inv } = await supabaseAdmin.from("invoices").select("user_id").eq("id", invoiceId).maybeSingle();
+  const { data: inv } = await supabaseAdmin.from("invoices").select("user_id").eq("public_token", invoiceId).maybeSingle();
   let merchantId: string | null = inv?.user_id ?? null;
 
   if (!merchantId) {
@@ -697,6 +1034,117 @@ app.post(
   }
 );
 
+const AGENT_FREE_TASKS_PER_MONTH = 5;
+
+app.post("/api/agent/act/start", agentLimiter, requireAuth as express.RequestHandler, async (req, res) => {
+  const { userId } = req as AuthenticatedRequest;
+  const task = typeof req.body?.task === "string" ? req.body.task.trim() : "";
+  if (!task) { res.status(400).json({ error: "task (string) is required" }); return; }
+
+  const { data: userData } = await supabaseAdmin.auth.admin.getUserById(userId);
+  const planId = getPlanId(userData?.user);
+  const startOfMonth = new Date();
+  startOfMonth.setUTCDate(1);
+  startOfMonth.setUTCHours(0, 0, 0, 0);
+
+  const { count, error: countError } = await supabaseAdmin
+    .from("agent_tasks")
+    .select("*", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .gte("created_at", startOfMonth.toISOString());
+
+  if (countError) {
+    res.status(countError.code === "42P01" ? 503 : 500).json({
+      error: countError.code === "42P01" ? "Database migration required: migrations/006_agent_tasks.sql" : countError.message,
+    });
+    return;
+  }
+
+  if (planId !== "pro" && (count ?? 0) >= AGENT_FREE_TASKS_PER_MONTH) {
+    res.status(403).json({
+      error: "Agent task limit reached",
+      code: "PLAN_LIMIT_REACHED",
+      upgradeRequired: true,
+      used: count ?? 0,
+      limit: AGENT_FREE_TASKS_PER_MONTH,
+    });
+    return;
+  }
+
+  const { error: insertError } = await supabaseAdmin
+    .from("agent_tasks")
+    .insert({ user_id: userId, task: task.slice(0, 500) });
+  if (insertError) { res.status(500).json({ error: insertError.message }); return; }
+
+  res.json({
+    allowed: true,
+    planId,
+    used: planId === "pro" ? null : (count ?? 0) + 1,
+    limit: planId === "pro" ? null : AGENT_FREE_TASKS_PER_MONTH,
+  });
+});
+
+const llmProxyLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "LLM rate limit reached. Please wait a moment." },
+});
+
+app.post(
+  "/api/llm/v1/chat/completions",
+  llmProxyLimiter,
+  requireAuth as express.RequestHandler,
+  async (req, res) => {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) { res.status(503).json({ error: "LLM not configured" }); return; }
+
+    const { userId } = req as AuthenticatedRequest;
+    const { data: userData } = await supabaseAdmin.auth.admin.getUserById(userId);
+    const planId = getPlanId(userData?.user);
+    if (planId !== "pro") {
+      const startOfMonth = new Date();
+      startOfMonth.setUTCDate(1);
+      startOfMonth.setUTCHours(0, 0, 0, 0);
+      const [{ count: taskCount }, { count: requestCount }] = await Promise.all([
+        supabaseAdmin.from("agent_tasks").select("*", { count: "exact", head: true }).eq("user_id", userId).gte("created_at", startOfMonth.toISOString()),
+        supabaseAdmin.from("agent_llm_requests").select("*", { count: "exact", head: true }).eq("user_id", userId).gte("created_at", startOfMonth.toISOString()),
+      ]);
+      if ((taskCount ?? 0) === 0) { res.status(403).json({ error: "Start an Act Mode task first." }); return; }
+      if ((requestCount ?? 0) >= 100) { res.status(429).json({ error: "Monthly Act Mode model limit reached." }); return; }
+      const { error: usageError } = await supabaseAdmin.from("agent_llm_requests").insert({ user_id: userId });
+      if (usageError) { res.status(503).json({ error: "Act Mode usage tracking is unavailable." }); return; }
+    }
+
+    const baseURL = (process.env.LLM_BASE_URL ?? "https://api.openai.com/v1").replace(/\/$/, "");
+    const body: Record<string, unknown> = {
+      ...(req.body as Record<string, unknown>),
+      model: process.env.LLM_MODEL ?? "gpt-4o-mini",
+    };
+
+    if (/qwen/i.test(String(body.model)) && body.reasoning === undefined) {
+      body.reasoning = { enabled: false };
+    }
+
+    try {
+      const upstream = await fetch(`${baseURL}/chat/completions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(55_000),
+      });
+      const responseBody = await upstream.arrayBuffer();
+      res.status(upstream.status);
+      res.setHeader("Content-Type", upstream.headers.get("content-type") ?? "application/json");
+      res.send(Buffer.from(responseBody));
+    } catch (error) {
+      console.error("[llm-proxy]", error);
+      res.status(502).json({ error: "LLM provider unavailable" });
+    }
+  }
+);
+
 // ─── Super Admin routes ───────────────────────────────────────────────────────
 
 const adminApi = express.Router();
@@ -739,7 +1187,7 @@ adminApi.get("/merchants", async (_req, res) => {
     const adminEmails = (process.env.ADMIN_EMAILS ?? "").split(",").map((e) => e.trim());
     const merchants = users.map((u) => ({
       id: u.id, email: u.email ?? "", companyName: (u.user_metadata?.company_name as string) ?? "",
-      plan: (u.user_metadata?.plan as string) ?? "free",
+      plan: getPlanId(u),
       isSuspended: u.banned_until != null && new Date(u.banned_until) > new Date(),
       isAdmin: adminEmails.includes(u.email ?? ""),
       createdAt: u.created_at, lastSignIn: u.last_sign_in_at ?? null,
@@ -781,7 +1229,7 @@ adminApi.patch("/merchants/:userId/plan", async (req, res) => {
   const { plan } = req.body as { plan: "free" | "pro" };
   if (!["free", "pro"].includes(plan)) { res.status(400).json({ error: "plan must be 'free' or 'pro'" }); return; }
   try {
-    await supabaseAdmin.auth.admin.updateUserById(userId, { user_metadata: { plan } });
+    await setUserPlan(userId, plan);
     addLog("system", `Admin set plan=${plan} for ${userId}`);
     res.json({ success: true, userId, plan });
   } catch (err: any) { res.status(500).json({ error: err.message }); }

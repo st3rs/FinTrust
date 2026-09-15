@@ -8,7 +8,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import { CreditCard, Wallet, QrCode, CheckCircle2, Loader2, AlertCircle, Bitcoin, Copy } from 'lucide-react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
-import { supabase } from '../lib/supabase';
 import generatePayload from 'promptpay-qr';
 import QRCode from 'qrcode';
 import { loadScript } from '@paypal/paypal-js';
@@ -25,33 +24,14 @@ interface GatewayStatus {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function fetchInvoice(id: string): Promise<Invoice | null> {
-  // Try Supabase client first (fastest)
   try {
-    const { data } = await supabase.from('invoices').select('*').eq('id', id).single();
-    if (data) {
-      return {
-        id: data.id,
-        invoiceNumber: data.metadata?.invoiceNumber ?? data.id,
-        amount: data.amount ?? 0,
-        currency: data.metadata?.currency ?? 'USD',
-        status: data.status ?? 'UNPAID',
-        customerName: data.client ?? 'Client',
-        customerEmail: data.metadata?.customerEmail ?? '',
-        dueDate: data.due_date ?? data.date ?? new Date().toISOString(),
-        createdAt: data.created_at ?? data.date ?? new Date().toISOString(),
-        items: data.metadata?.items ?? [{ description: 'Services Rendered', quantity: 1, price: data.amount ?? 0 }],
-      };
-    }
-  } catch { /* fall through */ }
-
-  // Fallback to API
-  try {
-    const r = await fetch(`/api/invoices/${id}`);
+    const r = await fetch(`/api/public/invoices/${encodeURIComponent(id)}`);
+    if (!r.ok) return null;
     const d = await r.json();
-    if (d.data) return d.data;
-  } catch { /* fall through */ }
-
-  return null;
+    return d.data ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // Reusable payment link → mapped into the same Invoice shape the page renders.
@@ -75,6 +55,8 @@ async function fetchPaymentLink(id: string): Promise<{ invoice: Invoice; methods
         dueDate: data.created_at ?? new Date().toISOString(),
         createdAt: data.created_at ?? new Date().toISOString(),
         items: [{ description: data.description || data.title, quantity: 1, price: Number(data.amount) || 0 }],
+        promptPayId: data.promptPayId ?? null,
+        gatewayStatus: data.gatewayStatus,
       },
       methods: (data.methods ?? { stripe: true }) as LinkMethods,
     };
@@ -274,10 +256,7 @@ function PromptPayTab({
   const [polling, setPolling] = useState(false);
   const [pollCount, setPollCount] = useState(0);
 
-  const promptPayId =
-    typeof window !== 'undefined'
-      ? localStorage.getItem('defaultPromptPayId') ?? ''
-      : '';
+  const promptPayId = invoice.promptPayId ?? '';
 
   // Generate QR when ID or amount changes
   useEffect(() => {
@@ -366,28 +345,16 @@ function PromptPayTab({
           : 'Scan the QR above, then confirm below.'}
       </p>
 
-      {/* Manual fallback — in case webhook fires but polling misses it */}
-      <Button
-        className="w-full"
-        variant="ghost"
-        size="sm"
-        onClick={onSuccess}
-      >
-        I've already paid — confirm manually
-      </Button>
+      <p className="text-[11px] text-muted-foreground">
+        Payment is marked paid only after the merchant or payment provider verifies receipt.
+      </p>
     </div>
   );
 }
 
 // ─── Crypto tab ───────────────────────────────────────────────────────────────
 
-function CryptoTab({
-  invoice,
-  onSuccess,
-}: {
-  invoice: Invoice;
-  onSuccess: () => void;
-}) {
+function CryptoTab({ invoice }: { invoice: Invoice }) {
   const [wallets, setWallets] = useState<Record<string, string>>({});
   const [rates, setRates] = useState<Record<string, number>>({});
   const [qrCodes, setQrCodes] = useState<Record<string, string>>({});
@@ -546,9 +513,9 @@ function CryptoTab({
             Send the exact amount to this address. Notify the merchant after sending.
           </p>
 
-          <Button variant="ghost" size="sm" className="w-full" onClick={onSuccess}>
-            I've sent the payment — confirm manually
-          </Button>
+          <p className="text-[11px] text-muted-foreground text-center">
+            The merchant must verify the on-chain transfer before this invoice is marked paid.
+          </p>
         </div>
       )}
     </div>
@@ -578,6 +545,8 @@ export default function PaymentPage() {
       if (!active) return;
       if (inv) {
         setInvoice(inv);
+        setLinkMethods(inv.paymentMethods ?? null);
+        if (inv.gatewayStatus) setGatewayStatus(inv.gatewayStatus);
         if (inv.status === 'PAID') setPaymentSuccess(true);
         setLoading(false);
         return;
@@ -588,6 +557,7 @@ export default function PaymentPage() {
       if (link) {
         setInvoice(link.invoice);
         setLinkMethods(link.methods);
+        if (link.invoice.gatewayStatus) setGatewayStatus(link.invoice.gatewayStatus);
       }
       setLoading(false);
     });
@@ -595,14 +565,19 @@ export default function PaymentPage() {
     return () => { active = false; };
   }, [id]);
 
-  // ── Payment link + Stripe redirect-back: success is immediate ───────────────
-  // Links are reusable (no PAID status to poll); Stripe only redirects with
-  // ?stripe=success after the charge succeeded.
+  // ── Payment link + Stripe redirect-back ────────────────────────────────────
+  // Verify the returned Checkout Session server-side; query parameters alone
+  // are never treated as proof of payment.
   useEffect(() => {
-    if (searchParams.get('stripe') === 'success' && searchParams.get('link') === '1') {
-      setPaymentSuccess(true);
-    }
-  }, [searchParams]);
+    const sessionId = searchParams.get('session_id');
+    if (searchParams.get('stripe') !== 'success' || searchParams.get('link') !== '1' || !id || !sessionId) return;
+    let cancelled = false;
+    fetch(`/api/public/payment-links/${encodeURIComponent(id)}/payment-status/${encodeURIComponent(sessionId)}`)
+      .then((response) => response.json())
+      .then((data) => { if (!cancelled && data.status === 'PAID') setPaymentSuccess(true); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [searchParams, id]);
 
   // ── Handle Stripe redirect-back ─────────────────────────────────────────────
   // After Stripe checkout, the URL has ?stripe=success. Poll until DB reflects PAID.
@@ -627,11 +602,13 @@ export default function PaymentPage() {
 
   // ── Fetch gateway status ────────────────────────────────────────────────────
   useEffect(() => {
-    fetch('/api/gateways/status')
-      .then((r) => r.json())
-      .then(setGatewayStatus)
-      .catch(() => {});
-  }, []);
+    if (!gatewayStatus) {
+      fetch('/api/gateways/status')
+        .then((r) => r.json())
+        .then(setGatewayStatus)
+        .catch(() => {});
+    }
+  }, [gatewayStatus]);
 
   if (loading) {
     return (
@@ -817,10 +794,7 @@ export default function PaymentPage() {
                       </TabsContent>
 
                       <TabsContent value="crypto">
-                        <CryptoTab
-                          invoice={invoice}
-                          onSuccess={handleSuccess}
-                        />
+                        <CryptoTab invoice={invoice} />
                       </TabsContent>
                     </Tabs>
                       );

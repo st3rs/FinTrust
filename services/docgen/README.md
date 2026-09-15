@@ -74,7 +74,8 @@ Sarabun is **baked into the Gotenberg image** at build time
 PDF renderer resolves Thai text locally with **no network request**. The default
 template therefore has no Google Fonts `<link>` and `gotenberg.ts` sets no
 `waitDelay`. `docker compose up -d` builds this custom image automatically; set a
-real `GOOGLE_FONTS_SHA` in the Dockerfile (see its comments) before first build.
+The Dockerfile pins a verified Google Fonts commit. Bump `GOOGLE_FONTS_SHA`
+deliberately after verifying all four Sarabun files still exist.
 
 ## Supabase setup (one-time)
 

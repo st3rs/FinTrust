@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth-context';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -24,7 +23,7 @@ import {
 
 export default function CreateInvoice() {
   const navigate = useNavigate();
-  const { user, session } = useAuth();
+  const { session } = useAuth();
   const [step, setStep] = useState(1);
   const [planError, setPlanError] = useState<string | null>(null);
 
@@ -69,29 +68,51 @@ export default function CreateInvoice() {
   };
 
   const handleSend = async () => {
-    setLoading(true);
-    try {
-      const { error } = await supabase.from('invoices').insert({
-        id: invoiceNumber,
-        client: client || 'Acme Corp',
-        amount: totalAmount,
-        date: invoiceDate || new Date().toISOString().split('T')[0],
-        status: 'UNPAID',
-        due_date: new Date().toISOString().split('T')[0],
-        dueDate: new Date().toISOString().split('T')[0],
-        user_id: user?.id,
-        metadata: { items, notes, taxRate }
-      });
+    if (!session?.access_token) {
+      setPlanError('Your session has expired. Please sign in again.');
+      return;
+    }
 
-      if (error) throw error;
-      
+    setLoading(true);
+    setPlanError(null);
+    try {
+      const baseDate = invoiceDate ? new Date(`${invoiceDate}T00:00:00Z`) : new Date();
+      const netDays = Number(dueDateType.match(/\d+/)?.[0] ?? 0);
+      const dueDate = new Date(baseDate);
+      dueDate.setUTCDate(dueDate.getUTCDate() + netDays);
+
+      const response = await fetch('/api/invoices', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          customerName: client || 'Acme Corp',
+          customerEmail: '',
+          amount: totalAmount,
+          currency: 'THB',
+          invoiceDate: baseDate.toISOString().slice(0, 10),
+          dueDate: dueDate.toISOString().slice(0, 10),
+          items,
+          notes,
+          taxRate,
+          paymentMethods,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (result.code === 'PLAN_LIMIT_REACHED') {
+          setPlanError(result.message ?? 'Invoice limit reached.');
+        }
+        throw new Error(result.error ?? result.message ?? `HTTP ${response.status}`);
+      }
       navigate('/invoices');
-    } catch(err) {
+    } catch (err) {
       console.error('Save error', err);
-      // Fallback
-      setTimeout(() => {
-        navigate('/invoices');
-      }, 1000);
+      setPlanError(err instanceof Error ? err.message : 'Unable to create invoice.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -436,7 +457,7 @@ export default function CreateInvoice() {
                     )}
                   </label>
 
-                  {/* Bank Transfer */}
+                  {/* PayPal */}
                   <label className={`relative border rounded-xl p-4 flex gap-3 cursor-pointer transition-colors ${
                     paymentMethods.bank ? 'border-indigo-600 bg-indigo-50/30' : 'border-slate-200 hover:bg-slate-50'
                   }`}>
@@ -448,9 +469,9 @@ export default function CreateInvoice() {
                     />
                     <div>
                       <div className="font-semibold text-slate-900 text-sm flex items-center gap-1.5 mb-1">
-                        <Building className="w-4 h-4" /> โอนเงินธนาคาร
+                        <Building className="w-4 h-4" /> PayPal
                       </div>
-                      <div className="text-xs text-slate-500">ฟรี (SCB / KBank / KTB)</div>
+                      <div className="text-xs text-slate-500">Pay with a PayPal account</div>
                     </div>
                     {paymentMethods.bank && (
                       <div className="absolute top-0 right-0 w-0 h-0 border-t-[28px] border-t-indigo-600 border-l-[28px] border-l-transparent rounded-tr-xl">
@@ -637,7 +658,7 @@ export default function CreateInvoice() {
                         <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Payment Options</p>
                         <div className="flex flex-wrap gap-2">
                             {paymentMethods.card && <div className="flex items-center text-xs font-medium bg-white border border-slate-200 text-slate-600 px-3 py-2 rounded-md shadow-sm"><CreditCard className="w-3.5 h-3.5 mr-2 text-indigo-500" /> Credit Card</div>}
-                            {paymentMethods.bank && <div className="flex items-center text-xs font-medium bg-white border border-slate-200 text-slate-600 px-3 py-2 rounded-md shadow-sm"><Building className="w-3.5 h-3.5 mr-2 text-indigo-500" /> โอนเงินธนาคาร</div>}
+                            {paymentMethods.bank && <div className="flex items-center text-xs font-medium bg-white border border-slate-200 text-slate-600 px-3 py-2 rounded-md shadow-sm"><Building className="w-3.5 h-3.5 mr-2 text-indigo-500" /> PayPal</div>}
                             {paymentMethods.qr && <div className="flex items-center text-xs font-medium bg-white border border-slate-200 text-slate-600 px-3 py-2 rounded-md shadow-sm"><QrCode className="w-3.5 h-3.5 mr-2 text-indigo-500" /> PromptPay QR</div>}
                             {paymentMethods.crypto && <div className="flex items-center text-xs font-medium bg-white border border-orange-200 text-orange-600 px-3 py-2 rounded-md shadow-sm"><Bitcoin className="w-3.5 h-3.5 mr-2" /> Cryptocurrency</div>}
                         </div>
@@ -657,4 +678,3 @@ export default function CreateInvoice() {
     </div>
   );
 }
-

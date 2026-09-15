@@ -27,41 +27,12 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
-// Mock data for clients
-const INITIAL_CLIENTS = [
-  { id: '1', name: 'Acme Corp', email: 'billing@acme.corp', contactPerson: 'Jane Doe', status: 'Active', joinedDate: '2025-01-15', totalBilled: 12500, phone: '+1 555-0198', logoUrl: '' },
-  { id: '2', name: 'Global Tech', email: 'accounts@globaltech.com', contactPerson: 'John Smith', status: 'Active', joinedDate: '2025-03-22', totalBilled: 8400, phone: '+1 555-0234', logoUrl: '' },
-  { id: '3', name: 'Nexus Industries', email: 'finance@nexus.ind', contactPerson: 'Alice Johnson', status: 'Inactive', joinedDate: '2024-11-05', totalBilled: 4200, phone: '+1 555-0345', logoUrl: '' },
-  { id: '4', name: 'Stark Enterprises', email: 'tony@stark.com', contactPerson: 'Tony Stark', status: 'Active', joinedDate: '2026-02-10', totalBilled: 25000, phone: '+1 555-0456', logoUrl: '' },
-  { id: '5', name: 'Wayne Corp', email: 'bruce@wayne.corp', contactPerson: 'Bruce Wayne', status: 'Active', joinedDate: '2026-04-01', totalBilled: 50000, phone: '+1 555-0567', logoUrl: '' },
-];
-
-const CLIENT_INVOICES: Record<string, any[]> = {
-  '1': [
-    { id: 'INV-1045', date: '2025-05-15', amount: 5000, status: 'Paid', dueDate: '2025-05-30' },
-    { id: 'INV-1046', date: '2025-06-20', amount: 7500, status: 'Overdue', dueDate: '2025-07-05' }
-  ],
-  '2': [
-    { id: 'INV-1080', date: '2025-04-10', amount: 8400, status: 'Paid', dueDate: '2025-04-25' }
-  ],
-  '3': [
-    { id: 'INV-0922', date: '2024-12-01', amount: 4200, status: 'Paid', dueDate: '2024-12-15' }
-  ],
-  '4': [
-    { id: 'INV-1102', date: '2026-03-15', amount: 15000, status: 'Paid', dueDate: '2026-03-30' },
-    { id: 'INV-1135', date: '2026-04-22', amount: 10000, status: 'Pending', dueDate: '2026-05-07' }
-  ],
-  '5': [
-    { id: 'INV-1140', date: '2026-04-10', amount: 25000, status: 'Paid', dueDate: '2026-04-25' },
-    { id: 'INV-1152', date: '2026-05-02', amount: 25000, status: 'Paid', dueDate: '2026-05-17' }
-  ]
-};
-
 export default function Clients() {
   const reduced = useReducedMotion();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, session } = useAuth();
   const [clients, setClients] = useState<any[]>([]);
+  const [clientInvoices, setClientInvoices] = useState<Record<string, any[]>>({});
   const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -88,8 +59,36 @@ export default function Clients() {
         .range(pagination.offset, pagination.offset + pagination.limit - 1);
 
       if (!active) return;
-      setClients(data ?? INITIAL_CLIENTS); // fall back to mock if table empty
+      const fetchedClients = data ?? [];
+      setClients(fetchedClients);
       setTotal(count ?? 0);
+
+      const names = fetchedClients.map((client) => client.name).filter(Boolean);
+      if (names.length > 0) {
+        const { data: invoices } = await supabase
+          .from('invoices')
+          .select('id, client, amount, date, due_date, status, metadata')
+          .eq('user_id', user.id)
+          .in('client', names)
+          .order('date', { ascending: false });
+        if (!active) return;
+        const grouped: Record<string, any[]> = {};
+        for (const client of fetchedClients) {
+          grouped[client.id] = (invoices ?? [])
+            .filter((invoice) => invoice.client === client.name)
+            .map((invoice) => ({
+              id: invoice.metadata?.invoiceNumber ?? invoice.id,
+              date: invoice.date,
+              dueDate: invoice.due_date,
+              amount: Number(invoice.amount),
+              currency: invoice.metadata?.currency ?? 'THB',
+              status: invoice.status === 'PAID' ? 'Paid' : invoice.status === 'OVERDUE' ? 'Overdue' : 'Pending',
+            }));
+        }
+        setClientInvoices(grouped);
+      } else {
+        setClientInvoices({});
+      }
       setIsLoading(false);
     })();
 
@@ -114,8 +113,14 @@ export default function Clients() {
 
   const handleGenerateQR = async (client: any) => {
     try {
+      const promptPayId = user?.user_metadata?.promptpay_id;
+      if (!promptPayId) {
+        alert('Set your PromptPay ID in Settings before generating a QR code.');
+        return;
+      }
       setQrModalClient(client);
-      const url = await generatePromptPayQRBase64('0812345678', client.totalBilled);
+      const amount = Number(client.total_billed ?? client.totalBilled ?? 0);
+      const url = await generatePromptPayQRBase64(promptPayId, amount > 0 ? amount : undefined);
       setQrCodeDataUrl(url);
     } catch (error) {
       console.error(error);
@@ -156,35 +161,33 @@ export default function Clients() {
 
   const handleAddClient = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) return;
+    if (!user || !session?.access_token) return;
 
-    const { data: created, error } = await supabase
-      .from('customers')
-      .insert({
+    const response = await fetch('/api/customers', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({
         name: newClient.name,
         email: newClient.email,
         contact_person: newClient.contactPerson,
         phone: newClient.phone,
-        status: 'Active',
-        total_billed: 0,
-        user_id: user.id,
-      })
-      .select()
-      .single();
+        logo_url: newClient.logoUrl || null,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    const created = response.ok ? payload.data : null;
+    const error = response.ok ? null : new Error(payload.error ?? 'Unable to create client');
 
     if (created) {
       setClients([created, ...clients]);
       setTotal(t => t + 1);
     } else if (error) {
-      // Optimistic fallback for demo/offline
-      const createdClient = {
-        id: crypto.randomUUID(),
-        ...newClient,
-        status: 'Active',
-        joinedDate: new Date().toISOString().split('T')[0],
-        totalBilled: 0,
-      };
-      setClients([createdClient, ...clients]);
+      console.error(error);
+      alert(error.message);
+      return;
     }
     setIsAddModalOpen(false);
     setNewClient({ name: '', email: '', contactPerson: '', phone: '', logoUrl: '' });
@@ -514,13 +517,13 @@ export default function Clients() {
                                   </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                  {(CLIENT_INVOICES[client.id] || []).map((invoice) => (
+                                  {(clientInvoices[client.id] || []).map((invoice) => (
                                     <TableRow key={invoice.id} className="hover:bg-slate-50 dark:hover:bg-slate-900/50">
                                       <TableCell className="font-medium text-sm text-primary">{invoice.id}</TableCell>
                                       <TableCell className="text-sm text-slate-600 dark:text-slate-400">{invoice.date}</TableCell>
                                       <TableCell className="text-sm text-slate-600 dark:text-slate-400">{invoice.dueDate}</TableCell>
                                       <TableCell className="text-sm font-medium text-slate-900 dark:text-slate-200">
-                                        ${invoice.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        {new Intl.NumberFormat(undefined, { style: 'currency', currency: invoice.currency }).format(invoice.amount)}
                                       </TableCell>
                                       <TableCell className="text-right">
                                         <Badge 
@@ -536,7 +539,7 @@ export default function Clients() {
                                       </TableCell>
                                     </TableRow>
                                   ))}
-                                  {(!CLIENT_INVOICES[client.id] || CLIENT_INVOICES[client.id].length === 0) && (
+                                  {(!clientInvoices[client.id] || clientInvoices[client.id].length === 0) && (
                                     <TableRow>
                                       <TableCell colSpan={5} className="h-20 text-center text-sm text-slate-500 dark:text-slate-400">
                                         No invoices found for this client.
