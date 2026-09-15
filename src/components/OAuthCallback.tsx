@@ -6,6 +6,7 @@ import { useAuth } from '../lib/auth-context';
 
 const OAUTH_PROVIDER_KEY = 'fintrust.oauth.provider';
 const OAUTH_STARTED_AT_KEY = 'fintrust.oauth.started_at';
+const OAUTH_ONBOARDING_PENDING_KEY = 'fintrust.oauth.onboarding_pending';
 
 export default function OAuthCallback() {
   const navigate = useNavigate();
@@ -33,7 +34,11 @@ export default function OAuthCallback() {
     handledRef.current = true;
 
     const finishOAuth = async () => {
-      const provider = sessionStorage.getItem(OAUTH_PROVIDER_KEY);
+      const storedProvider = sessionStorage.getItem(OAUTH_PROVIDER_KEY);
+      const identityProvider = user.identities?.find(
+        (identity) => identity.provider === 'google' || identity.provider === 'github',
+      )?.provider;
+      const provider = storedProvider || user.app_metadata?.provider || identityProvider || null;
       const startedAt = Number(sessionStorage.getItem(OAUTH_STARTED_AT_KEY) || 0);
       const createdAt = Date.parse(user.created_at || '');
       const lastSignInAt = Date.parse(user.last_sign_in_at || '');
@@ -58,6 +63,8 @@ export default function OAuthCallback() {
         (wasCreatedDuringThisAttempt || looksLikeFirstSession);
 
       if (isNewOAuthUser) {
+        sessionStorage.setItem(OAUTH_ONBOARDING_PENDING_KEY, '1');
+
         try {
           await updateMetadata({
             onboarding_required: true,
@@ -67,12 +74,14 @@ export default function OAuthCallback() {
           navigate('/onboarding', { replace: true });
           return;
         } catch (err: any) {
+          sessionStorage.removeItem(OAUTH_ONBOARDING_PENDING_KEY);
           console.error('Failed to mark OAuth onboarding requirement:', err);
           setError('Your account was created, but setup could not be completed safely. Please try signing in again.');
           return;
         }
       }
 
+      sessionStorage.removeItem(OAUTH_ONBOARDING_PENDING_KEY);
       navigate('/dashboard', { replace: true });
     };
 
