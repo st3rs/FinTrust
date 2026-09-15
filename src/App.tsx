@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import Dashboard from './components/Dashboard';
@@ -21,7 +21,6 @@ import ApiDocs from './components/ApiDocs';
 import Login from './components/Login';
 import Register from './components/Register';
 import ForgotPassword from './components/ForgotPassword';
-import OAuthCallback from './components/OAuthCallback';
 import Onboarding from './components/Onboarding';
 import LandingPage from './components/LandingPage';
 import AdminLayout from './components/admin/AdminLayout';
@@ -35,13 +34,110 @@ import { LanguageProvider } from './components/language-provider';
 import { AuthProvider, useAuth } from './lib/auth-context';
 import { AdminProvider } from './lib/admin-context';
 
-const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { user, loading, needsOnboarding } = useAuth();
+const OAUTH_PROVIDER_KEY = 'fintrust.oauth.provider';
+const OAUTH_STARTED_AT_KEY = 'fintrust.oauth.started_at';
+const OAUTH_ONBOARDING_PENDING_KEY = 'fintrust.oauth.onboarding_pending';
 
-  if (loading) {
+const LoadingScreen = () => (
+  <div className="flex items-center justify-center min-h-screen bg-slate-50 dark:bg-slate-950">
+    <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary"></div>
+  </div>
+);
+
+const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
+  const { user, loading, needsOnboarding, updateMetadata, signOut } = useAuth();
+  const providerAtMount = typeof window !== 'undefined'
+    ? sessionStorage.getItem(OAUTH_PROVIDER_KEY)
+    : null;
+  const [oauthCheckComplete, setOAuthCheckComplete] = useState(!providerAtMount);
+  const [oauthError, setOAuthError] = useState('');
+  const processedOAuthRef = useRef(false);
+
+  useEffect(() => {
+    if (loading || processedOAuthRef.current) return;
+
+    if (!user) {
+      processedOAuthRef.current = true;
+      sessionStorage.removeItem(OAUTH_PROVIDER_KEY);
+      sessionStorage.removeItem(OAUTH_STARTED_AT_KEY);
+      sessionStorage.removeItem(OAUTH_ONBOARDING_PENDING_KEY);
+      setOAuthCheckComplete(true);
+      return;
+    }
+
+    const provider = sessionStorage.getItem(OAUTH_PROVIDER_KEY);
+    if (!provider) {
+      processedOAuthRef.current = true;
+      setOAuthCheckComplete(true);
+      return;
+    }
+
+    processedOAuthRef.current = true;
+
+    const finalizeOAuthSession = async () => {
+      const startedAt = Number(sessionStorage.getItem(OAUTH_STARTED_AT_KEY) || 0);
+      const createdAt = Date.parse(user.created_at || '');
+      const lastSignInAt = Date.parse(user.last_sign_in_at || '');
+      const isSupportedOAuthProvider = provider === 'google' || provider === 'github';
+      const wasCreatedDuringThisAttempt =
+        startedAt > 0 &&
+        Number.isFinite(createdAt) &&
+        createdAt >= startedAt - 60_000 &&
+        createdAt <= Date.now() + 60_000;
+      const looksLikeFirstSession =
+        Number.isFinite(createdAt) &&
+        Number.isFinite(lastSignInAt) &&
+        Math.abs(lastSignInAt - createdAt) <= 120_000;
+      const alreadyCompleted = user.user_metadata?.onboarding_completed === true;
+      const isNewOAuthUser =
+        isSupportedOAuthProvider &&
+        !alreadyCompleted &&
+        (wasCreatedDuringThisAttempt || looksLikeFirstSession);
+
+      if (isNewOAuthUser) {
+        sessionStorage.setItem(OAUTH_ONBOARDING_PENDING_KEY, '1');
+        try {
+          await updateMetadata({
+            onboarding_required: true,
+            onboarding_completed: false,
+            oauth_provider: provider,
+          });
+        } catch (err: any) {
+          sessionStorage.removeItem(OAUTH_ONBOARDING_PENDING_KEY);
+          setOAuthError(err?.message || 'Could not complete account setup safely.');
+          return;
+        }
+      } else {
+        sessionStorage.removeItem(OAUTH_ONBOARDING_PENDING_KEY);
+      }
+
+      sessionStorage.removeItem(OAUTH_PROVIDER_KEY);
+      sessionStorage.removeItem(OAUTH_STARTED_AT_KEY);
+      setOAuthCheckComplete(true);
+    };
+
+    void finalizeOAuthSession();
+  }, [loading, user, updateMetadata]);
+
+  if (loading) return <LoadingScreen />;
+
+  if (oauthError) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-50 dark:bg-slate-950">
-        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary"></div>
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
+        <div className="w-full max-w-md rounded-2xl border border-red-200 bg-white p-8 shadow-sm">
+          <h1 className="text-xl font-semibold text-slate-900">Account setup could not be completed</h1>
+          <p className="mt-2 text-sm text-red-700">{oauthError}</p>
+          <button
+            type="button"
+            className="mt-6 w-full rounded-md bg-slate-900 px-4 py-2.5 text-sm font-medium text-white"
+            onClick={async () => {
+              await signOut();
+              window.location.assign('/login');
+            }}
+          >
+            Back to sign in
+          </button>
+        </div>
       </div>
     );
   }
@@ -50,7 +146,12 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
     return <Navigate to="/login" replace />;
   }
 
-  if (needsOnboarding) {
+  if (!oauthCheckComplete) {
+    return <LoadingScreen />;
+  }
+
+  const pendingOAuthOnboarding = sessionStorage.getItem(OAUTH_ONBOARDING_PENDING_KEY) === '1';
+  if (needsOnboarding || pendingOAuthOnboarding) {
     return <Navigate to="/onboarding" replace />;
   }
 
@@ -69,7 +170,6 @@ export default function App() {
                 <Route path="/login" element={<Login />} />
                 <Route path="/register" element={<Register />} />
                 <Route path="/forgot-password" element={<ForgotPassword />} />
-                <Route path="/auth/oauth/callback" element={<OAuthCallback />} />
                 <Route path="/onboarding" element={<Onboarding />} />
 
                 {/* Merchant routes */}
