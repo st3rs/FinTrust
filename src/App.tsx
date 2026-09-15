@@ -21,6 +21,8 @@ import ApiDocs from './components/ApiDocs';
 import Login from './components/Login';
 import Register from './components/Register';
 import ForgotPassword from './components/ForgotPassword';
+import OAuthCallback from './components/OAuthCallback';
+import Onboarding from './components/Onboarding';
 import LandingPage from './components/LandingPage';
 import AdminLayout from './components/admin/AdminLayout';
 import AdminDashboard from './components/admin/AdminDashboard';
@@ -34,8 +36,8 @@ import { AuthProvider, useAuth } from './lib/auth-context';
 import { AdminProvider } from './lib/admin-context';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { user, loading } = useAuth();
-  
+  const { user, loading, needsOnboarding } = useAuth();
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-slate-50 dark:bg-slate-950">
@@ -47,6 +49,11 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   if (!user) {
     return <Navigate to="/login" replace />;
   }
+
+  if (needsOnboarding) {
+    return <Navigate to="/onboarding" replace />;
+  }
+
   return <>{children}</>;
 };
 
@@ -62,6 +69,8 @@ export default function App() {
                 <Route path="/login" element={<Login />} />
                 <Route path="/register" element={<Register />} />
                 <Route path="/forgot-password" element={<ForgotPassword />} />
+                <Route path="/auth/oauth/callback" element={<OAuthCallback />} />
+                <Route path="/onboarding" element={<Onboarding />} />
 
                 {/* Merchant routes */}
                 <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
@@ -97,5 +106,3 @@ export default function App() {
     </ThemeProvider>
   );
 }
-
-

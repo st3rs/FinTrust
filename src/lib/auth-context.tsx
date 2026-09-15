@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { User, Session, AuthError } from '@supabase/supabase-js';
+import { User, Session } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 import { getPlan, type PlanId, type Plan } from './plans';
 
@@ -9,9 +9,11 @@ interface AuthContextType {
   loading: boolean;
   companyName: string;
   setCompanyNameState: (name: string) => void;
-  updateMetadata: (data: any) => Promise<void>;
+  updateMetadata: (data: Record<string, unknown>) => Promise<void>;
   firstName: string;
   lastName: string;
+  avatarUrl: string;
+  needsOnboarding: boolean;
   signOut: () => Promise<void>;
   trialDaysLeft: number | null;
   plan: Plan;
@@ -20,6 +22,29 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const getNameParts = (metadata: Record<string, any>) => {
+  const fullName = String(metadata.full_name || metadata.name || '').trim();
+  const fullNameParts = fullName ? fullName.split(/\s+/) : [];
+
+  const firstName = String(
+    metadata.first_name ||
+      metadata.firstName ||
+      metadata.given_name ||
+      fullNameParts[0] ||
+      ''
+  ).trim();
+
+  const lastName = String(
+    metadata.last_name ||
+      metadata.lastName ||
+      metadata.family_name ||
+      (fullNameParts.length > 1 ? fullNameParts.slice(1).join(' ') : '') ||
+      ''
+  ).trim();
+
+  return { firstName, lastName };
+};
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -27,15 +52,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [companyName, setCompanyName] = useState('');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [avatarUrl, setAvatarUrl] = useState('');
+  const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(null);
   const [planId, setPlanId] = useState<PlanId>('free');
 
   useEffect(() => {
-    // onAuthStateChange fires INITIAL_SESSION immediately on subscribe —
-    // using getSession() separately causes a double-init race condition.
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      const currentUser = session?.user ?? null;
+    // onAuthStateChange fires INITIAL_SESSION immediately on subscribe.
+    // Using getSession() separately here causes a double-init race condition.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      const currentUser = nextSession?.user ?? null;
       setUser(currentUser);
 
       if (currentUser) {
@@ -44,6 +71,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setCompanyName('');
         setFirstName('');
         setLastName('');
+        setAvatarUrl('');
+        setNeedsOnboarding(false);
         setTrialDaysLeft(null);
         setPlanId('free');
       }
@@ -56,52 +85,56 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const parseUserMetadata = (currentUser: User) => {
-    const meta = currentUser.user_metadata || {};
-    const metaCompany = meta.company_name || meta.company || '';
-    const metaFirst = meta.first_name || meta.firstName || '';
-    const metaLast = meta.last_name || meta.lastName || '';
+    const meta = (currentUser.user_metadata || {}) as Record<string, any>;
+    const metaCompany = String(meta.company_name || meta.company || '').trim();
+    const names = getNameParts(meta);
+    const metaAvatar = String(meta.avatar_url || meta.picture || '').trim();
+    const companyStorageKey = `companyName:${currentUser.id}`;
 
     if (metaCompany) {
       setCompanyName(metaCompany);
-      localStorage.setItem('companyName', metaCompany);
+      localStorage.setItem(companyStorageKey, metaCompany);
     } else {
-      const stored = localStorage.getItem('companyName');
-      if (stored) setCompanyName(stored);
+      // Never use a global companyName fallback: it can leak the previous
+      // account's company name when multiple people use the same browser.
+      setCompanyName(localStorage.getItem(companyStorageKey) || '');
     }
 
-    if (metaFirst) setFirstName(metaFirst);
-    if (metaLast) setLastName(metaLast);
+    setFirstName(names.firstName);
+    setLastName(names.lastName);
+    setAvatarUrl(metaAvatar);
+    setNeedsOnboarding(meta.onboarding_required === true && meta.onboarding_completed !== true);
 
-    // Plan — defaults to 'free' for all new accounts
-    // Subscription state is server-owned. Supabase users can edit user_metadata,
-    // but cannot edit app_metadata, so never authorize paid features from `meta`.
+    // Plan defaults to free. Paid authorization must only use server-owned
+    // app_metadata because user_metadata is editable by the signed-in user.
     const rawPlan = (currentUser.app_metadata?.plan as PlanId) ?? 'free';
     setPlanId(rawPlan === 'pro' ? 'pro' : 'free');
 
-    // trialDaysLeft kept for display only, no enforcement (freemium replaces trial)
+    // Kept for display compatibility only. Freemium replaces trial enforcement.
     setTrialDaysLeft(null);
   };
 
   const setCompanyNameState = (name: string) => {
-    setCompanyName(name);
-    localStorage.setItem('companyName', name);
-    
-    // Attempt to update Supabase metadata of the current user asynchronously
+    const normalized = name.trim();
+    setCompanyName(normalized);
+
     if (user) {
+      localStorage.setItem(`companyName:${user.id}`, normalized);
       supabase.auth.updateUser({
-        data: { company_name: name }
-      }).catch(err => console.error('Failed to update user company metadata:', err));
+        data: { company_name: normalized },
+      }).catch((err) => console.error('Failed to update user company metadata:', err));
     }
   };
 
-  const updateMetadata = async (data: any) => {
+  const updateMetadata = async (data: Record<string, unknown>) => {
     if (!user) return;
+
     const { data: { user: updatedUser }, error } = await supabase.auth.updateUser({
-      data
+      data,
     });
-    if (error) {
-      throw error;
-    }
+
+    if (error) throw error;
+
     if (updatedUser) {
       setUser(updatedUser);
       parseUserMetadata(updatedUser);
@@ -115,11 +148,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.removeItem('isAuthenticated');
       localStorage.removeItem('authMethod');
       localStorage.removeItem('trialEndsAt');
+      localStorage.removeItem('companyName'); // remove legacy cross-account key
     } catch (err) {
       console.error('Error signing out:', err);
     } finally {
       setUser(null);
       setSession(null);
+      setCompanyName('');
+      setFirstName('');
+      setLastName('');
+      setAvatarUrl('');
+      setNeedsOnboarding(false);
       setLoading(false);
     }
   };
@@ -134,6 +173,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       updateMetadata,
       firstName,
       lastName,
+      avatarUrl,
+      needsOnboarding,
       signOut,
       trialDaysLeft,
       plan: getPlan(planId),
