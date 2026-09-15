@@ -9,6 +9,7 @@ import { useAuth } from '../lib/auth-context';
 
 const TERMS_VERSION = '2026-09-15';
 const PRIVACY_VERSION = '2026-09-15';
+const OAUTH_ONBOARDING_PENDING_KEY = 'fintrust.oauth.onboarding_pending';
 
 export default function Onboarding() {
   const navigate = useNavigate();
@@ -28,16 +29,26 @@ export default function Onboarding() {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
 
+  const onboardingCompleted = user?.user_metadata?.onboarding_completed === true;
+  const pendingOAuthOnboarding = sessionStorage.getItem(OAUTH_ONBOARDING_PENDING_KEY) === '1';
+  const shouldShowOnboarding = Boolean(user) && (needsOnboarding || pendingOAuthOnboarding) && !onboardingCompleted;
+
   useEffect(() => {
     if (!loading && !user) {
       navigate('/login', { replace: true });
       return;
     }
 
-    if (!loading && user && !needsOnboarding) {
+    if (!loading && user && onboardingCompleted) {
+      sessionStorage.removeItem(OAUTH_ONBOARDING_PENDING_KEY);
+      navigate('/dashboard', { replace: true });
+      return;
+    }
+
+    if (!loading && user && !needsOnboarding && !pendingOAuthOnboarding) {
       navigate('/dashboard', { replace: true });
     }
-  }, [loading, user, needsOnboarding, navigate]);
+  }, [loading, user, onboardingCompleted, needsOnboarding, pendingOAuthOnboarding, navigate]);
 
   useEffect(() => {
     if (companyName && !company) setCompany(companyName);
@@ -75,6 +86,7 @@ export default function Onboarding() {
         onboarding_completed_at: acceptedAt,
       });
 
+      sessionStorage.removeItem(OAUTH_ONBOARDING_PENDING_KEY);
       navigate('/dashboard', { replace: true });
     } catch (err: any) {
       console.error('Onboarding completion failed:', err);
@@ -84,7 +96,7 @@ export default function Onboarding() {
     }
   };
 
-  if (loading || !user || !needsOnboarding) {
+  if (loading || !shouldShowOnboarding) {
     return (
       <AuthLayout title="Preparing your account" subtitle="Checking your account setup.">
         <div className="py-8 text-center text-sm text-slate-600">Loading...</div>
@@ -92,7 +104,7 @@ export default function Onboarding() {
     );
   }
 
-  const displayName = [firstName, lastName].filter(Boolean).join(' ') || user.email || 'there';
+  const displayName = [firstName, lastName].filter(Boolean).join(' ') || user?.email || 'there';
 
   return (
     <AuthLayout
