@@ -100,8 +100,8 @@ export default function Settings() {
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus | null>(null);
   const [usage, setUsage] = useState<{ invoicesThisMonth: number; invoiceLimit: number | null; canCreateInvoice: boolean } | null>(null);
   const [upgradeLoading, setUpgradeLoading] = useState(false);
-  const [stripeStatus, setStripeStatus] = useState<{ connected: boolean; publishableKey: string | null; environment: string | null } | null>(null);
-  const [stripeForm, setStripeForm] = useState({ publishableKey: '', secretKey: '', environment: 'live' });
+  const [stripeStatus, setStripeStatus] = useState<{ connected: boolean; publishableKey: string | null; environment: string | null; webhookConfigured?: boolean; webhookUrl?: string } | null>(null);
+  const [stripeForm, setStripeForm] = useState({ publishableKey: '', secretKey: '', webhookSecret: '', environment: 'live' });
   const [stripeConnecting, setStripeConnecting] = useState(false);
   const [stripeError, setStripeError] = useState('');
   const [cryptoWallets, setCryptoWallets] = useState<Record<string, string>>({ usdt_trc20: '', usdt_erc20: '', btc: '', eth: '', bnb_bsc: '' });
@@ -153,8 +153,8 @@ export default function Settings() {
       });
       const data = await res.json();
       if (!res.ok) { setStripeError(data.error ?? 'Connection failed'); return; }
-      setStripeStatus({ connected: true, publishableKey: stripeForm.publishableKey, environment: stripeForm.environment });
-      setStripeForm({ publishableKey: '', secretKey: '', environment: 'live' });
+      setStripeStatus({ connected: true, publishableKey: stripeForm.publishableKey, environment: stripeForm.environment, webhookConfigured: true, webhookUrl: `${window.location.origin}/api/stripe/webhook/${user?.id}` });
+      setStripeForm({ publishableKey: '', secretKey: '', webhookSecret: '', environment: 'live' });
     } finally {
       setStripeConnecting(false);
     }
@@ -163,7 +163,7 @@ export default function Settings() {
   const handleStripeDisconnect = async () => {
     if (!session?.access_token) return;
     await fetch('/api/gateways/stripe/disconnect', { method: 'DELETE', headers: { Authorization: `Bearer ${session.access_token}` } });
-    setStripeStatus({ connected: false, publishableKey: null, environment: null });
+    setStripeStatus({ connected: false, publishableKey: null, environment: null, webhookConfigured: false });
   };
 
   useEffect(() => {
@@ -575,6 +575,20 @@ export default function Settings() {
                   className="w-full border border-slate-200 focus:ring-primary/20 focus:border-primary rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 transition-all"
                   required
                 />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">Webhook Signing Secret (whsec_...)</label>
+                <input
+                  type="password"
+                  value={stripeForm.webhookSecret}
+                  onChange={e => setStripeForm(f => ({ ...f, webhookSecret: e.target.value }))}
+                  placeholder="whsec_..."
+                  className="w-full border border-slate-200 focus:ring-primary/20 focus:border-primary rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 transition-all"
+                  required
+                />
+                <p className="text-[10px] text-slate-400 mt-1 break-all">
+                  Create a Stripe webhook for <span className="font-mono">{`${window.location.origin}/api/stripe/webhook/${user?.id ?? 'YOUR_USER_ID'}`}</span> and subscribe to <span className="font-mono">checkout.session.completed</span>.
+                </p>
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-700 block mb-1">Mode</label>

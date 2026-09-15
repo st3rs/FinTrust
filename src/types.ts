@@ -16,4 +16,16 @@ export interface Invoice {
   expiresAt?: string;
   createdAt: string;
   items: InvoiceItem[];
+  promptPayId?: string;
+  paymentMethods?: {
+    stripe?: boolean;
+    paypal?: boolean;
+    promptpay?: boolean;
+    crypto?: boolean;
+  };
+  gatewayStatus?: {
+    stripe: { connected: boolean; mode: string | null };
+    paypal: { connected: boolean; environment: string | null };
+    promptpay: { connected: boolean };
+  };
 }

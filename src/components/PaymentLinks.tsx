@@ -7,7 +7,6 @@ import {
   Filter, 
   MoreHorizontal, 
   Copy, 
-  ExternalLink,
   QrCode,
   Archive,
   Trash2,
@@ -142,7 +141,7 @@ export default function PaymentLinks() {
   };
 
   const handleCopyLink = (link: any) => {
-    const url = link.reference ?? `${window.location.origin}/pay/${link.id}`;
+    const url = `${window.location.origin}/pay/${link.id}`;
     navigator.clipboard.writeText(url);
   };
 
@@ -203,8 +202,8 @@ export default function PaymentLinks() {
         <Card className="border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden group">
           <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-500/10 rounded-full blur-2xl -mr-8 -mt-8" />
           <CardContent className="p-4 sm:p-6 flex flex-col">
-             <span className="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-1">Stripe Links</span>
-             <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">{isLoading ? '—' : links.filter(l => l.reference).length}</span>
+             <span className="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-1">Card Enabled</span>
+             <span className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">{isLoading ? '—' : links.filter(l => l.methods?.stripe).length}</span>
           </CardContent>
         </Card>
         <Card className="border-slate-200 dark:border-slate-800 shadow-sm">
@@ -281,7 +280,7 @@ export default function PaymentLinks() {
                     <TableCell className="px-6 py-4">
                       <div className="font-semibold text-slate-900 dark:text-slate-100">{link.title}</div>
                       <div className="flex items-center gap-2 mt-1">
-                        <span className="text-xs font-mono text-slate-500 truncate max-w-[180px]">{link.reference ?? link.id}</span>
+                        <span className="text-xs font-mono text-slate-500 truncate max-w-[180px]">{`${window.location.origin}/pay/${link.id}`}</span>
                         <button
                           onClick={() => handleCopyLink(link)}
                           className="text-slate-400 hover:text-indigo-600 transition-colors"
@@ -296,7 +295,7 @@ export default function PaymentLinks() {
                       <div className="font-semibold text-slate-900 dark:text-slate-100">
                         {Number(link.amount).toLocaleString(undefined, {minimumFractionDigits: 2})}
                       </div>
-                      {link.reference && (
+                      {link.methods?.stripe && (
                         <div className="flex items-center gap-1 mt-1.5 opacity-60">
                           <div className="bg-slate-200 dark:bg-slate-800 rounded px-1 py-0.5">
                             <CreditCard className="w-3 h-3 text-indigo-600 dark:text-indigo-400" />
@@ -331,11 +330,6 @@ export default function PaymentLinks() {
                               <DropdownMenuItem className="cursor-pointer" onClick={() => handleCopyLink(link)}>
                                 <Copy className="mr-2 w-4 h-4 text-slate-500" /> Copy Link
                               </DropdownMenuItem>
-                              {link.reference && (
-                                <DropdownMenuItem className="cursor-pointer" onClick={() => window.open(link.reference, '_blank')}>
-                                  <ExternalLink className="mr-2 w-4 h-4 text-slate-500" /> Open in Stripe
-                                </DropdownMenuItem>
-                              )}
                               <DropdownMenuItem className="cursor-pointer" onClick={() => {
                                 setSelectedLink(link);
                                 setIsQRModalOpen(true);
@@ -402,7 +396,7 @@ export default function PaymentLinks() {
 
                 <div className="flex items-center justify-between mt-3">
                   <div className="flex items-center gap-1 opacity-70">
-                    {link.reference && (
+                    {link.methods?.stripe && (
                       <div className="bg-slate-100 dark:bg-slate-800 rounded px-1 py-0.5">
                         <CreditCard className="w-3 h-3 text-indigo-600 dark:text-indigo-400" />
                       </div>
@@ -420,7 +414,6 @@ export default function PaymentLinks() {
                       } />
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem className="cursor-pointer" onClick={() => handleCopyLink(link)}>Copy Link</DropdownMenuItem>
-                        {link.reference && <DropdownMenuItem className="cursor-pointer" onClick={() => window.open(link.reference, '_blank')}>Open in Stripe</DropdownMenuItem>}
                         <DropdownMenuSeparator />
                         <DropdownMenuItem className="cursor-pointer text-amber-600" onClick={() => handleToggleActive(link)}>
                           {link.is_active ? 'Disable' : 'Enable'}
@@ -443,12 +436,12 @@ export default function PaymentLinks() {
             <DialogTitle className="text-center">{selectedLink?.title}</DialogTitle>
             <DialogDescription className="text-center cursor-pointer hover:text-indigo-600 transition-colors flex items-center justify-center gap-1 mt-1 font-mono text-xs"
               onClick={() => selectedLink && handleCopyLink(selectedLink)}>
-              {selectedLink?.reference ? new URL(selectedLink.reference).hostname + '/...' : selectedLink?.id} <Copy className="w-3 h-3" />
+              {selectedLink ? `${window.location.origin}/pay/${selectedLink.id}` : ''} <Copy className="w-3 h-3" />
             </DialogDescription>
           </DialogHeader>
           <div className="py-6 flex flex-col items-center justify-center border-y border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
              <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
-               <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(selectedLink?.reference ?? `${window.location.origin}/pay/${selectedLink?.id}`)}`} alt="QR Code" className="w-[200px] h-[200px]" />
+               <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`${window.location.origin}/pay/${selectedLink?.id}`)}`} alt="QR Code" className="w-[200px] h-[200px]" />
              </div>
              <p className="text-xs text-slate-500 mt-4 text-center max-w-[250px]">
                Scan this QR code with any smartphone camera to open the payment page.

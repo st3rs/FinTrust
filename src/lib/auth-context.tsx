@@ -73,7 +73,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (metaLast) setLastName(metaLast);
 
     // Plan — defaults to 'free' for all new accounts
-    const rawPlan = (meta.plan as PlanId) ?? 'free';
+    // Subscription state is server-owned. Supabase users can edit user_metadata,
+    // but cannot edit app_metadata, so never authorize paid features from `meta`.
+    const rawPlan = (currentUser.app_metadata?.plan as PlanId) ?? 'free';
     setPlanId(rawPlan === 'pro' ? 'pro' : 'free');
 
     // trialDaysLeft kept for display only, no enforcement (freemium replaces trial)

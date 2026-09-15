@@ -1,7 +1,10 @@
 name: CI/CD Pipeline
 
 on:
-  workflow_dispatch:  # manual trigger only — re-enable push/PR when billing is resolved
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
 
 jobs:
   build-and-lint:
@@ -31,4 +34,16 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Build Application
+        run: npm run build
+
+      - name: Install document service dependencies
+        working-directory: services/docgen
+        run: npm ci
+
+      - name: Type-check document service
+        working-directory: services/docgen
+        run: npm run typecheck
+
+      - name: Build document service
+        working-directory: services/docgen
         run: npm run build
