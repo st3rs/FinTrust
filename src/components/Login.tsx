@@ -17,7 +17,9 @@ const getOAuthRedirectUrl = () => {
     ? configuredAppUrl
     : window.location.origin;
 
-  return `${baseUrl}/auth/oauth/callback`;
+  // Keep the established production redirect path so this change does not
+  // require a new Supabase Auth redirect allow-list entry.
+  return `${baseUrl}/dashboard`;
 };
 
 export default function Login() {
