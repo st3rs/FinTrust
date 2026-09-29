@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Github, AlertCircle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth-context';
+import { reportAuthError } from '../lib/auth-errors';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -42,13 +43,8 @@ export default function Login() {
       if (data?.session) {
         navigate('/dashboard');
       }
-    } catch (err: any) {
-      console.error('Login error:', err);
-      if (err?.message === 'Failed to fetch') {
-        setError('Connection failed. Check that VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set in your .env file and the dev server is running.');
-      } else {
-        setError(err?.message || 'Invalid email or password. Please try again.');
-      }
+    } catch (err: unknown) {
+      setError(reportAuthError('Login error', err));
     } finally {
       setIsLoading(false);
     }
@@ -64,9 +60,8 @@ export default function Login() {
         options: { redirectTo: window.location.origin + '/dashboard' },
       });
       if (authError) throw authError;
-    } catch (err: any) {
-      console.error(`${provider} auth error:`, err);
-      setError(err?.message || `Could not connect with ${provider}. Please try again.`);
+    } catch (err: unknown) {
+      setError(reportAuthError(`${provider} auth error`, err));
       setIsGithubLoading(false);
       setIsGoogleLoading(false);
     }

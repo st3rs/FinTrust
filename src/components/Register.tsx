@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AlertCircle, Mail } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { reportAuthError } from '../lib/auth-errors';
 
 export default function Register() {
   const navigate = useNavigate();
@@ -61,13 +62,8 @@ export default function Register() {
         setEmail('');
         setPassword('');
       }
-    } catch (err: any) {
-      console.error('Registration error:', err);
-      if (err?.message === 'Failed to fetch') {
-        setError('Connection failed. Check that VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set in your .env file and the dev server is running.');
-      } else {
-        setError(err?.message || 'Could not complete registration. Please try again.');
-      }
+    } catch (err: unknown) {
+      setError(reportAuthError('Registration error', err));
     } finally {
       setIsLoading(false);
     }
